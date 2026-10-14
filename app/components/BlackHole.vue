@@ -15,7 +15,7 @@
       </label>
       <label class="size-control">
         Size
-        <input v-model.number="size" type="range" min="0.65" max="1.5" step="0.05" :disabled="controlsDisabled" @change="requestSizeUpdate">
+        <input v-model.number="size" type="range" min="0.35" max="1.5" step="0.05" :disabled="controlsDisabled" @change="requestSizeUpdate">
         <output>{{ Math.round(size * 100) }}%</output>
       </label>
       <span v-if="busy" role="status">{{ status }}</span>
