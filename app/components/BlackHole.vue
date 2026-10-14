@@ -13,6 +13,11 @@
         Speed
         <input v-model.number="speed" type="range" min="0" max="3" step="0.1" :disabled="controlsDisabled">
       </label>
+      <label class="size-control">
+        Size
+        <input v-model.number="size" type="range" min="0.65" max="1.5" step="0.05" :disabled="controlsDisabled" @change="requestSizeUpdate">
+        <output>{{ Math.round(size * 100) }}%</output>
+      </label>
       <span v-if="busy" role="status">{{ status }}</span>
     </section>
     <canvas
@@ -33,9 +38,8 @@ const INCL = 84 * Math.PI / 180
 const TILT = 0.27
 const R_IN = 3.4
 const R_OUT = 48
-const SHADOW_PX = 122 / 736 * WIDTH
-const UNIT = SHADOW_PX / 5.196
-const CX = 640 / 736 * WIDTH
+const BASE_SHADOW_PX = 122 / 736 * WIDTH
+const CX = 580 / 736 * WIDTH
 const CY = 110 / 414 * HEIGHT
 const SPIN_RATE = 0.5
 const SHEAR = 1.0
@@ -68,6 +72,7 @@ const canvas = ref(null)
 const finishEnabled = ref(true)
 const spinEnabled = ref(true)
 const speed = ref(1)
+const size = ref(1)
 const busy = ref(true)
 const controlsDisabled = ref(true)
 const status = ref('Computing…')
@@ -99,6 +104,9 @@ let row = 0
 let fixedTime = null
 let frame = 0
 let timer = 0
+let resizeTimer = 0
+let shadowPx = BASE_SHADOW_PX
+let unit = shadowPx / 5.196
 let lastFrameTime = 0
 let spinTime = 0
 let dirty = true
@@ -145,8 +153,34 @@ onMounted(() => {
 onBeforeUnmount(() => {
   mounted = false
   window.clearTimeout(timer)
+  window.clearTimeout(resizeTimer)
   window.cancelAnimationFrame(frame)
 })
+
+function requestSizeUpdate() {
+  if (!mounted || fixedTime !== null) return
+  window.clearTimeout(resizeTimer)
+  resizeTimer = window.setTimeout(resizeBlackHole, 250)
+}
+
+function resizeBlackHole() {
+  if (!mounted) return
+  window.clearTimeout(timer)
+  window.cancelAnimationFrame(frame)
+  frame = 0
+  busy.value = true
+  controlsDisabled.value = true
+  status.value = 'Resizing…'
+  window.__done = false
+  shadowPx = BASE_SHADOW_PX * size.value
+  unit = shadowPx / 5.196
+  buildGlowMask()
+  crossingCount.fill(0)
+  activePixels.length = 0
+  row = 0
+  context.clearRect(0, 0, WIDTH, HEIGHT)
+  timer = window.setTimeout(() => renderRows(performance.now() + 40), 0)
+}
 
 function hash(x, y) {
   let value = x * 374761393 + y * 668265263
@@ -411,8 +445,8 @@ function renderRows(deadline) {
     const y = row++
     for (let x = 0; x < WIDTH; x += 1) {
       const pixel = y * WIDTH + x
-      const screenX = (x - CX) / UNIT
-      const screenY = -(y - CY) / UNIT
+      const screenX = (x - CX) / unit
+      const screenY = -(y - CY) / unit
       const rayX = screenX * cosTilt + screenY * sinTilt
       const rayY = -screenX * sinTilt + screenY * cosTilt
       traceRay(rayX, rayY, pixel)
@@ -424,8 +458,8 @@ function renderRows(deadline) {
       const lobe = 0.5 + 0.5 * Math.cos(angle - 2.6)
       let added = 0.8 * Math.exp(-ringDistance * ringDistance) * (0.08 + 0.92 * lobe * lobe)
       const shadowDistance = Math.hypot(x - CX, y - CY)
-      added += 0.012 + 0.05 * Math.exp(-shadowDistance / (SHADOW_PX * 2))
-        * (shadowDistance > SHADOW_PX ? 1 : 0.1)
+      added += 0.012 + 0.05 * Math.exp(-shadowDistance / (shadowPx * 2))
+        * (shadowDistance > shadowPx ? 1 : 0.1)
       additionalLight[pixel] = added
       const vignetteX = Math.max(0, (WIDTH * 0.4 - x) / (WIDTH * 0.4))
       const vignetteY = Math.max(0, (y - HEIGHT * 0.8) / (HEIGHT * 0.4))
@@ -476,8 +510,8 @@ function buildGlowMask() {
   glowContext.imageSmoothingEnabled = true
   glowContext.imageSmoothingQuality = 'high'
   const centerX = CX
-  const centerY = CY + SHADOW_PX * 0.95
-  const radius = SHADOW_PX * 1.5
+  const centerY = CY + shadowPx * 0.95
+  const radius = shadowPx * 1.5
   glowMask = glowContext.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius)
   glowMask.addColorStop(0, 'rgba(0,0,0,1)')
   glowMask.addColorStop(0.5, 'rgba(0,0,0,0.6)')
@@ -552,8 +586,15 @@ body,
   cursor: pointer;
 }
 
-.control-panel .speed-control input {
+.control-panel .speed-control input,
+.control-panel .size-control input {
   width: 110px;
+}
+
+.control-panel .size-control output {
+  min-width: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .control-panel.busy,
