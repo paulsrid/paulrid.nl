@@ -1,78 +1,151 @@
 <template>
   <main class="black-hole-stage">
-    <label class="finish-toggle">
-      <input v-model="bloomEnabled" type="checkbox" :disabled="rendering">
-      Finish (bloom)
-    </label>
+    <section class="control-panel" :class="{ busy }" aria-label="Black hole controls">
+      <label>
+        <input v-model="finishEnabled" type="checkbox" :disabled="busy">
+        Finish (bloom)
+      </label>
+      <label>
+        <input v-model="spinEnabled" type="checkbox" :disabled="busy">
+        Spin disk
+      </label>
+      <label class="speed-control">
+        Speed
+        <input v-model.number="speed" type="range" min="0" max="3" step="0.1" :disabled="busy">
+      </label>
+      <span v-if="busy" role="status">{{ status }}</span>
+    </section>
     <canvas
       ref="canvas"
       class="black-hole-canvas"
       :width="WIDTH"
       :height="HEIGHT"
-      aria-label="Ray-traced black hole and accretion disk"
+      aria-label="Spinning ray-traced black hole and accretion disk"
     />
   </main>
 </template>
 
 <script setup>
-const WIDTH = 736
-const HEIGHT = 414
+const WIDTH = 1280
+const HEIGHT = 720
+const PIXEL_COUNT = WIDTH * HEIGHT
 const INCL = 84 * Math.PI / 180
 const TILT = 0.27
 const R_IN = 3.4
 const R_OUT = 48
-const SHADOW_PX = 122
+const SHADOW_PX = 122 / 736 * WIDTH
 const UNIT = SHADOW_PX / 5.196
-const CX = 640
-const CY = 110
-const PLANET = { x: 320, y: 146, r: 7 }
+const CX = 640 / 736 * WIDTH
+const CY = 110 / 414 * HEIGHT
+const SPIN_RATE = 0.5
+const SHEAR = 1.0
+const BOTTOM_BLOOM = 4
 const TAU = 2 * Math.PI
+const STOPS = [
+  [0, 5, 3, 3], [0.18, 46, 22, 11], [0.42, 150, 76, 30],
+  [0.66, 238, 150, 72], [0.86, 255, 215, 160], [1.05, 255, 250, 240],
+]
+const LUT_SIZE = 2048
+const LUT_MAX = 1.05
+const LUT_SCALE = (LUT_SIZE - 1) / LUT_MAX
+const TEXTURE_ANGLES = 1536
+const TEXTURE_RADII = 512
+const MIN_RADIUS = R_IN - 0.2
+const RADIUS_STEP = (R_OUT - MIN_RADIUS) / (TEXTURE_RADII - 1)
+const MAX_CROSSINGS = 3
 const STEP_FAR = 0.06
 const STEP_NEAR = 0.03
 const CD_F = Math.cos(STEP_FAR)
 const SD_F = Math.sin(STEP_FAR)
 const CD_N = Math.cos(STEP_NEAR)
 const SD_N = Math.sin(STEP_NEAR)
-const BOTTOM_BLOOM = 4
-const STOPS = [
-  [0, 5, 3, 3], [0.18, 46, 22, 11], [0.42, 150, 76, 30],
-  [0.66, 238, 150, 72], [0.86, 255, 215, 160], [1.05, 255, 250, 240],
-]
-
-const canvas = ref(null)
-const bloomEnabled = ref(true)
-const rendering = ref(true)
-
-let timer = 0
-let outputContext
-let rawCanvas
-let pixels
-let row = 0
-const colors = [0, 0, 0]
-const sample = { val: 0, a: 0 }
 const sinIncl = Math.sin(INCL)
 const cosIncl = Math.cos(INCL)
 const cosTilt = Math.cos(TILT)
 const sinTilt = Math.sin(TILT)
 
+const canvas = ref(null)
+const finishEnabled = ref(true)
+const spinEnabled = ref(true)
+const speed = ref(1)
+const busy = ref(true)
+const status = ref('Computing…')
+
+const lutR = new Uint8Array(LUT_SIZE)
+const lutG = new Uint8Array(LUT_SIZE)
+const lutB = new Uint8Array(LUT_SIZE)
+const textureValue = new Float32Array(TEXTURE_ANGLES * TEXTURE_RADII)
+const textureAlpha = new Float32Array(TEXTURE_ANGLES * TEXTURE_RADII)
+const crossingCount = new Uint8Array(PIXEL_COUNT)
+const crossingRadius = new Float32Array(PIXEL_COUNT * MAX_CROSSINGS)
+const crossingAngle = new Float32Array(PIXEL_COUNT * MAX_CROSSINGS)
+const crossingSpeed = new Float32Array(PIXEL_COUNT * MAX_CROSSINGS)
+const crossingEmission = new Float32Array(PIXEL_COUNT * MAX_CROSSINGS)
+const crossingEdge = new Float32Array(PIXEL_COUNT * MAX_CROSSINGS)
+const additionalLight = new Float32Array(PIXEL_COUNT)
+const vignette = new Float32Array(PIXEL_COUNT)
+let image
+const activePixels = []
+
+let context
+let rawCanvas
+let rawContext
+let glowCanvas
+let glowContext
+let glowMask
+let smallCanvases
+let row = 0
+let fixedTime = null
+let frame = 0
+let timer = 0
+let lastFrameTime = 0
+let spinTime = 0
+let dirty = true
+let mounted = false
+
+watch([finishEnabled, spinEnabled, speed], () => {
+  dirty = true
+})
+
 onMounted(() => {
   const node = canvas.value
   if (!node) return
+  context = node.getContext('2d')
+  if (!context) return
 
-  outputContext = node.getContext('2d')
-  if (!outputContext) return
-  pixels = outputContext.createImageData(WIDTH, HEIGHT)
+  image = context.createImageData(WIDTH, HEIGHT)
   rawCanvas = document.createElement('canvas')
   rawCanvas.width = WIDTH
   rawCanvas.height = HEIGHT
+  rawContext = rawCanvas.getContext('2d')
+  glowCanvas = document.createElement('canvas')
+  glowCanvas.width = WIDTH
+  glowCanvas.height = HEIGHT
+  glowContext = glowCanvas.getContext('2d')
+  buildGlowMask()
+  smallCanvases = [makeSmallCanvas(6), makeSmallCanvas(20), makeSmallCanvas(10)]
 
-  timer = window.setTimeout(() => renderRows(performance.now() + 40), 0)
-  watch(bloomEnabled, (enabled) => {
-    if (!rendering.value) applyFinish(enabled)
-  })
+  const parameters = new URLSearchParams(window.location.search)
+  if (parameters.has('t')) {
+    const requestedTime = Number.parseFloat(parameters.get('t'))
+    fixedTime = Number.isFinite(requestedTime) ? requestedTime : 0
+  }
+  spinTime = fixedTime ?? 0
+  mounted = true
+
+  timer = window.setTimeout(() => {
+    buildColorLut()
+    buildDiskTexture()
+    status.value = 'Tracing rays…'
+    timer = window.setTimeout(() => renderRows(performance.now() + 40), 0)
+  }, 30)
 })
 
-onBeforeUnmount(() => window.clearTimeout(timer))
+onBeforeUnmount(() => {
+  mounted = false
+  window.clearTimeout(timer)
+  window.cancelAnimationFrame(frame)
+})
 
 function hash(x, y) {
   let value = x * 374761393 + y * 668265263
@@ -127,35 +200,61 @@ function smooth(low, high, value) {
   return t * t * (3 - 2 * t)
 }
 
-function diskSample(radius, angle, result) {
+function buildColorLut() {
+  for (let index = 0; index < LUT_SIZE; index += 1) {
+    const value = index / LUT_SCALE
+    let stop = 0
+    while (stop < STOPS.length - 2 && value > STOPS[stop + 1][0]) stop += 1
+    const start = STOPS[stop]
+    const end = STOPS[stop + 1]
+    const mix = clamp((value - start[0]) / (end[0] - start[0]), 0, 1)
+    lutR[index] = start[1] + (end[1] - start[1]) * mix
+    lutG[index] = start[2] + (end[2] - start[2]) * mix
+    lutB[index] = start[3] + (end[3] - start[3]) * mix
+  }
+}
+
+function buildDiskTexture() {
+  for (let radiusIndex = 0; radiusIndex < TEXTURE_RADII; radiusIndex += 1) {
+    const radius = MIN_RADIUS + radiusIndex * RADIUS_STEP
+    for (let angleIndex = 0; angleIndex < TEXTURE_ANGLES; angleIndex += 1) {
+      const angle = -Math.PI + angleIndex * TAU / TEXTURE_ANGLES
+      const density = clamp(periodicFbm(angle, 2.3, radius * 0.9) * 1.9, 0, 1.4)
+      const grain = periodicNoise(angle, 16, radius * 3)
+      const index = radiusIndex * TEXTURE_ANGLES + angleIndex
+      textureValue[index] = (0.12 + 1.5 * density ** 1.4) * (0.7 + 0.6 * grain)
+      textureAlpha[index] = clamp(0.1 + 0.8 * density, 0, 0.9)
+    }
+  }
+}
+
+function recordCrossing(pixel, radius, angle) {
+  const count = crossingCount[pixel]
   const edge = smooth(R_IN, R_IN + 0.7, radius)
     * (1 - smooth(R_OUT * 0.35, R_OUT, radius))
-  if (edge <= 0.001) {
-    result.val = 0
-    result.a = 0
-    return
-  }
+  if (edge <= 0.001) return false
 
   const intensity = (R_IN / radius) ** 2.1
   const velocity = Math.min(0.6, 1 / Math.sqrt(radius - 2))
   const gamma = 1 / Math.sqrt(1 - velocity * velocity)
   const velocityAlongSight = -velocity * Math.sin(angle) * sinIncl
-  const shift = Math.sqrt(1 - 2 / radius) / (gamma * (1 - velocityAlongSight))
-  const beam = shift ** 2.6
-  let shearedAngle = angle + 1.6 * Math.log(radius)
-  shearedAngle -= TAU * Math.floor((shearedAngle + Math.PI) / TAU)
-  const dust = periodicFbm(shearedAngle, 2.3, radius * 0.9)
-  const grain = periodicNoise(shearedAngle, 16, radius * 3)
-  const density = clamp(dust * 1.9, 0, 1.4)
+  const redshift = Math.sqrt(1 - 2 / radius) / (gamma * (1 - velocityAlongSight))
+  let textureAngle = angle + 1.6 * Math.log(radius)
+  textureAngle -= TAU * Math.floor((textureAngle + Math.PI) / TAU)
+  const index = pixel * MAX_CROSSINGS + count
 
-  result.val = intensity * beam * (0.12 + 1.5 * density ** 1.4)
-    * (0.7 + 0.6 * grain) * edge
-  result.a = clamp(0.1 + 0.8 * density, 0, 0.9) * edge
+  crossingRadius[index] = clamp((radius - MIN_RADIUS) / RADIUS_STEP, 0, TEXTURE_RADII - 1.001)
+  crossingAngle[index] = textureAngle
+  crossingSpeed[index] = (R_IN / radius) ** SHEAR
+  crossingEmission[index] = intensity * redshift ** 2.6 * edge
+  crossingEdge[index] = edge
+  crossingCount[pixel] = count + 1
+  return true
 }
 
-function traceRay(x, y) {
+function traceRay(x, y, pixel) {
   const impact = Math.hypot(x, y)
-  if (impact < 1e-3) return 0
+  if (impact < 1e-3) return
 
   const e2x = -y * cosIncl / impact
   const e2y = x / impact
@@ -165,8 +264,6 @@ function traceRay(x, y) {
   let cosPhi = 1
   let sinPhi = 0
   let previousPlane = cosIncl
-  let light = 0
-  let transmittance = 1
 
   for (let step = 0; step < 420; step += 1) {
     const far = u < 0.035
@@ -198,149 +295,193 @@ function traceRay(x, y) {
       const crossingU = u + fraction * (nextU - u)
       if (crossingU > 0) {
         const radius = 1 / crossingU
-        if (radius > R_IN - 0.2 && radius < R_OUT) {
+        if (radius > MIN_RADIUS && radius < R_OUT) {
           const crossingCos = cosPhi + fraction * (nextCosPhi - cosPhi)
           const crossingSin = sinPhi + fraction * (nextSinPhi - sinPhi)
           const px = radius * (crossingCos * sinIncl + crossingSin * e2x)
           const py = radius * crossingSin * e2y
-          diskSample(radius, Math.atan2(py, px), sample)
-          light += transmittance * sample.a * sample.val
-          transmittance *= 1 - sample.a
-          if (transmittance < 0.02) return light
+          recordCrossing(pixel, radius, Math.atan2(py, px))
+          if (crossingCount[pixel] >= MAX_CROSSINGS) return
         }
       }
     }
 
-    if (nextU >= 0.5 || nextU <= 0) return light
+    if (nextU >= 0.5 || nextU <= 0) return
     u = nextU
     v = nextV
     cosPhi = nextCosPhi
     sinPhi = nextSinPhi
     previousPlane = nextPlane
   }
-  return light
 }
 
-function heat(value, output) {
-  if (value <= 0) {
-    output[0] = 5
-    output[1] = 3
-    output[2] = 3
-    return
+function shadePixel(pixel, rotation) {
+  let light = 0
+  const count = crossingCount[pixel]
+  if (count) {
+    let transmittance = 1
+    for (let crossing = 0; crossing < count; crossing += 1) {
+      const index = pixel * MAX_CROSSINGS + crossing
+      let angle = crossingAngle[index] - crossingSpeed[index] * rotation
+      angle -= TAU * Math.floor((angle + Math.PI) / TAU)
+      const anglePosition = (angle + Math.PI) * (TEXTURE_ANGLES / TAU)
+      const angleIndex = anglePosition | 0
+      const angleMix = anglePosition - angleIndex
+      const nextAngleIndex = angleIndex + 1 === TEXTURE_ANGLES ? 0 : angleIndex + 1
+      const radiusPosition = crossingRadius[index]
+      const radiusIndex = radiusPosition | 0
+      const radiusMix = radiusPosition - radiusIndex
+      const offset0 = radiusIndex * TEXTURE_ANGLES
+      const offset1 = offset0 + TEXTURE_ANGLES
+      const value = (textureValue[offset0 + angleIndex] * (1 - angleMix)
+        + textureValue[offset0 + nextAngleIndex] * angleMix) * (1 - radiusMix)
+        + (textureValue[offset1 + angleIndex] * (1 - angleMix)
+          + textureValue[offset1 + nextAngleIndex] * angleMix) * radiusMix
+      const alpha = (textureAlpha[offset0 + angleIndex] * (1 - angleMix)
+        + textureAlpha[offset0 + nextAngleIndex] * angleMix) * (1 - radiusMix)
+        + (textureAlpha[offset1 + angleIndex] * (1 - angleMix)
+          + textureAlpha[offset1 + nextAngleIndex] * angleMix) * radiusMix
+      const opacity = alpha * crossingEdge[index]
+      light += transmittance * opacity * crossingEmission[index] * value
+      transmittance *= 1 - opacity
+      if (transmittance < 0.02) break
+    }
   }
-  const last = STOPS[STOPS.length - 1]
-  if (value >= last[0]) {
-    output[0] = last[1]
-    output[1] = last[2]
-    output[2] = last[3]
-    return
+
+  light = (light * 1.25 + additionalLight[pixel]) * vignette[pixel]
+  let colorIndex = (light * LUT_SCALE) | 0
+  colorIndex = clamp(colorIndex, 0, LUT_SIZE - 1)
+  const offset = pixel * 4
+  image.data[offset] = lutR[colorIndex]
+  image.data[offset + 1] = lutG[colorIndex]
+  image.data[offset + 2] = lutB[colorIndex]
+  image.data[offset + 3] = 255
+}
+
+function shadeActive(rotation) {
+  for (let index = 0; index < activePixels.length; index += 1) {
+    shadePixel(activePixels[index], rotation)
   }
-  let index = 0
-  while (value > STOPS[index + 1][0]) index += 1
-  const start = STOPS[index]
-  const end = STOPS[index + 1]
-  const mix = (value - start[0]) / (end[0] - start[0])
-  output[0] = start[1] + (end[1] - start[1]) * mix
-  output[1] = start[2] + (end[2] - start[2]) * mix
-  output[2] = start[3] + (end[3] - start[3]) * mix
+}
+
+function makeSmallCanvas(divisor) {
+  const small = document.createElement('canvas')
+  small.width = Math.round(WIDTH / divisor)
+  small.height = Math.round(HEIGHT / divisor)
+  const smallContext = small.getContext('2d')
+  smallContext.imageSmoothingEnabled = true
+  smallContext.imageSmoothingQuality = 'high'
+  return { canvas: small, context: smallContext }
+}
+
+function applyFinish(enabled) {
+  context.globalAlpha = 1
+  context.globalCompositeOperation = 'source-over'
+  context.drawImage(rawCanvas, 0, 0)
+  if (!enabled) return
+
+  context.save()
+  context.globalCompositeOperation = 'lighter'
+  for (const [small, alpha] of [[smallCanvases[0], 0.45], [smallCanvases[1], 0.55]]) {
+    small.context.clearRect(0, 0, small.canvas.width, small.canvas.height)
+    small.context.drawImage(rawCanvas, 0, 0, small.canvas.width, small.canvas.height)
+    context.globalAlpha = alpha
+    context.drawImage(small.canvas, 0, 0, WIDTH, HEIGHT)
+  }
+
+  const smallGlow = smallCanvases[2]
+  smallGlow.context.clearRect(0, 0, smallGlow.canvas.width, smallGlow.canvas.height)
+  smallGlow.context.drawImage(rawCanvas, 0, 0, smallGlow.canvas.width, smallGlow.canvas.height)
+  glowContext.globalCompositeOperation = 'source-over'
+  glowContext.clearRect(0, 0, WIDTH, HEIGHT)
+  glowContext.drawImage(smallGlow.canvas, 0, 0, WIDTH, HEIGHT)
+  glowContext.globalCompositeOperation = 'destination-in'
+  glowContext.fillStyle = glowMask
+  glowContext.fillRect(0, 0, WIDTH, HEIGHT)
+  context.globalAlpha = 1
+  for (let layer = 0; layer < BOTTOM_BLOOM; layer += 1) {
+    context.drawImage(glowCanvas, 0, 0)
+  }
+  context.restore()
 }
 
 function renderRows(deadline) {
   while (row < HEIGHT && performance.now() < deadline) {
     const y = row++
     for (let x = 0; x < WIDTH; x += 1) {
+      const pixel = y * WIDTH + x
       const screenX = (x - CX) / UNIT
       const screenY = -(y - CY) / UNIT
       const rayX = screenX * cosTilt + screenY * sinTilt
       const rayY = -screenX * sinTilt + screenY * cosTilt
-      let light = traceRay(rayX, rayY) * 1.25
+      traceRay(rayX, rayY, pixel)
+      if (crossingCount[pixel]) activePixels.push(pixel)
 
       const impact = Math.hypot(rayX, rayY)
       const ringDistance = (impact - 5.22) / 0.055
       const angle = Math.atan2(screenY, screenX)
       const lobe = 0.5 + 0.5 * Math.cos(angle - 2.6)
-      light += 0.8 * Math.exp(-ringDistance * ringDistance) * (0.08 + 0.92 * lobe * lobe)
-
+      let added = 0.8 * Math.exp(-ringDistance * ringDistance) * (0.08 + 0.92 * lobe * lobe)
       const shadowDistance = Math.hypot(x - CX, y - CY)
-      light += 0.012 + 0.05 * Math.exp(-shadowDistance / (SHADOW_PX * 2))
+      added += 0.012 + 0.05 * Math.exp(-shadowDistance / (SHADOW_PX * 2))
         * (shadowDistance > SHADOW_PX ? 1 : 0.1)
+      additionalLight[pixel] = added
       const vignetteX = Math.max(0, (WIDTH * 0.4 - x) / (WIDTH * 0.4))
       const vignetteY = Math.max(0, (y - HEIGHT * 0.8) / (HEIGHT * 0.4))
-      light *= 1 - 0.5 * clamp(vignetteX * 0.8 + vignetteY, 0, 1)
-
-      heat(light, colors)
-      const offset = (y * WIDTH + x) * 4
-      pixels.data[offset] = colors[0]
-      pixels.data[offset + 1] = colors[1]
-      pixels.data[offset + 2] = colors[2]
-      pixels.data[offset + 3] = 255
+      vignette[pixel] = 1 - 0.5 * clamp(vignetteX * 0.8 + vignetteY, 0, 1)
+      shadePixel(pixel, spinTime * SPIN_RATE)
     }
   }
 
-  outputContext.putImageData(pixels, 0, 0)
+  context.putImageData(image, 0, 0)
   if (row < HEIGHT) {
     timer = window.setTimeout(() => renderRows(performance.now() + 40), 0)
   } else {
-    finish()
+    finishInitialRender()
   }
 }
 
-function finish() {
-  const context = rawCanvas.getContext('2d')
-  context.drawImage(canvas.value, 0, 0)
-  rendering.value = false
-  applyFinish(bloomEnabled.value)
+function finishInitialRender() {
+  shadeActive(spinTime * SPIN_RATE)
+  rawContext.putImageData(image, 0, 0)
+  applyFinish(finishEnabled.value)
+  window.__done = true
+  busy.value = false
+  if (fixedTime !== null) return
+
+  frame = window.requestAnimationFrame((time) => {
+    lastFrameTime = time
+    tick(time)
+  })
 }
 
-function applyFinish(enabled) {
-  outputContext.globalAlpha = 1
-  outputContext.globalCompositeOperation = 'source-over'
-  outputContext.drawImage(rawCanvas, 0, 0)
-  if (!enabled) return
-
-  outputContext.save()
-  outputContext.globalCompositeOperation = 'lighter'
-  for (const [divisor, alpha] of [[6, 0.45], [20, 0.55]]) {
-    const small = document.createElement('canvas')
-    small.width = Math.round(WIDTH / divisor)
-    small.height = Math.round(HEIGHT / divisor)
-    const smallContext = small.getContext('2d')
-    smallContext.imageSmoothingEnabled = true
-    smallContext.imageSmoothingQuality = 'high'
-    smallContext.drawImage(rawCanvas, 0, 0, small.width, small.height)
-    outputContext.globalAlpha = alpha
-    outputContext.imageSmoothingEnabled = true
-    outputContext.imageSmoothingQuality = 'high'
-    outputContext.drawImage(small, 0, 0, WIDTH, HEIGHT)
+function tick(now) {
+  if (!mounted) return
+  const delta = Math.min(0.1, (now - lastFrameTime) / 1000)
+  lastFrameTime = now
+  const spinning = spinEnabled.value && speed.value > 0
+  if (spinning) spinTime += delta * speed.value
+  if (spinning || dirty) {
+    shadeActive(spinTime * SPIN_RATE)
+    rawContext.putImageData(image, 0, 0)
+    applyFinish(finishEnabled.value)
+    dirty = false
   }
+  frame = window.requestAnimationFrame(tick)
+}
 
-  const glow = document.createElement('canvas')
-  glow.width = WIDTH
-  glow.height = HEIGHT
-  const glowContext = glow.getContext('2d')
-  const small = document.createElement('canvas')
-  small.width = Math.round(WIDTH / 10)
-  small.height = Math.round(HEIGHT / 10)
-  const smallContext = small.getContext('2d')
-  smallContext.imageSmoothingEnabled = true
-  smallContext.imageSmoothingQuality = 'high'
-  smallContext.drawImage(rawCanvas, 0, 0, small.width, small.height)
+function buildGlowMask() {
   glowContext.imageSmoothingEnabled = true
   glowContext.imageSmoothingQuality = 'high'
-  glowContext.drawImage(small, 0, 0, WIDTH, HEIGHT)
-  glowContext.globalCompositeOperation = 'destination-in'
-  const mask = glowContext.createRadialGradient(CX, CY + SHADOW_PX * 0.95, 0, CX, CY + SHADOW_PX * 0.95, SHADOW_PX * 1.5)
-  mask.addColorStop(0, 'rgba(0,0,0,1)')
-  mask.addColorStop(0.5, 'rgba(0,0,0,0.6)')
-  mask.addColorStop(1, 'rgba(0,0,0,0)')
-  glowContext.fillStyle = mask
-  glowContext.fillRect(0, 0, WIDTH, HEIGHT)
-  outputContext.globalAlpha = 1
-  for (let layer = 0; layer < BOTTOM_BLOOM; layer += 1) {
-    outputContext.drawImage(glow, 0, 0)
-  }
-  outputContext.restore()
+  const centerX = CX
+  const centerY = CY + SHADOW_PX * 0.95
+  const radius = SHADOW_PX * 1.5
+  glowMask = glowContext.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius)
+  glowMask.addColorStop(0, 'rgba(0,0,0,1)')
+  glowMask.addColorStop(0.5, 'rgba(0,0,0,0.6)')
+  glowMask.addColorStop(1, 'rgba(0,0,0,0)')
 }
+
 </script>
 
 <style>
@@ -380,15 +521,15 @@ body,
   object-fit: cover;
 }
 
-.finish-toggle {
+.control-panel {
   position: fixed;
   top: 12px;
   left: 12px;
   z-index: 1;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.55);
   color: #e8d6c0;
@@ -396,8 +537,23 @@ body,
   user-select: none;
 }
 
-.finish-toggle:has(input:disabled) {
-  opacity: 0.5;
+.control-panel label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.control-panel .speed-control input {
+  width: 110px;
+}
+
+.control-panel.busy,
+.control-panel.busy label {
   cursor: progress;
+}
+
+.control-panel.busy {
+  opacity: 0.5;
 }
 </style>
