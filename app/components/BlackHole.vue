@@ -2,16 +2,16 @@
   <main class="black-hole-stage">
     <section class="control-panel" :class="{ busy }" aria-label="Black hole controls">
       <label>
-        <input v-model="finishEnabled" type="checkbox" :disabled="busy">
+        <input v-model="finishEnabled" type="checkbox" :disabled="controlsDisabled">
         Finish (bloom)
       </label>
       <label>
-        <input v-model="spinEnabled" type="checkbox" :disabled="busy">
+        <input v-model="spinEnabled" type="checkbox" :disabled="controlsDisabled">
         Spin disk
       </label>
       <label class="speed-control">
         Speed
-        <input v-model.number="speed" type="range" min="0" max="3" step="0.1" :disabled="busy">
+        <input v-model.number="speed" type="range" min="0" max="3" step="0.1" :disabled="controlsDisabled">
       </label>
       <span v-if="busy" role="status">{{ status }}</span>
     </section>
@@ -69,6 +69,7 @@ const finishEnabled = ref(true)
 const spinEnabled = ref(true)
 const speed = ref(1)
 const busy = ref(true)
+const controlsDisabled = ref(true)
 const status = ref('Computing…')
 
 const lutR = new Uint8Array(LUT_SIZE)
@@ -449,6 +450,7 @@ function finishInitialRender() {
   busy.value = false
   if (fixedTime !== null) return
 
+  controlsDisabled.value = false
   frame = window.requestAnimationFrame((time) => {
     lastFrameTime = time
     tick(time)
@@ -519,6 +521,12 @@ body,
   width: 100vw;
   height: 100vh;
   object-fit: cover;
+}
+
+@media (max-aspect-ratio: 1/1) {
+  .black-hole-canvas {
+    object-position: 90% center;
+  }
 }
 
 .control-panel {
