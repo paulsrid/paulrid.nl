@@ -127,7 +127,8 @@
         the colours shift. A final bloom pass adds the glow.
       </p>
       <p>
-        Copyright 2026 Paul Rid (paul.s.rid@pm.me).
+        Copyright 2026 Paul Rid<template v-if="contact">
+          (<a :href="`mailto:${contact}`">{{ contact }}</a>)</template>.
       </p>
       </div>
     </aside>
@@ -226,6 +227,13 @@ let unit = shadowPx / 5.196
 let needsTrace = true
 let dirty = true
 let mounted = false
+
+// The address is only assembled client-side once the info box is opened, so it
+// is never in the served HTML or the bundle as a literal string.
+const contact = ref('')
+watch(infoOpen, (open) => {
+  if (open && !contact.value) contact.value = ['paul.s.rid', 'pm.me'].join(String.fromCharCode(64))
+})
 
 // Panel colours follow the disk palette: the 0.66 stop for the accent, the 0.86 stop for text
 const stopColor = (warm, cool) => `rgb(${warm.map((v, i) => Math.round(v + (cool[i] - v) * temperature.value)).join(', ')})`
@@ -1069,6 +1077,10 @@ body,
 
 .info-box p {
   margin: 0 0 6px;
+}
+
+.info-box a {
+  color: inherit;
 }
 
 .info-box p:last-child {
