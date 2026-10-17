@@ -9,7 +9,7 @@
     >
       Controls
     </button>
-    <section v-show="!panelHidden" class="control-panel" :class="{ busy }" aria-label="Black hole controls">
+    <section v-show="!panelHidden" class="control-panel" :class="{ busy }" :style="panelColors" aria-label="Black hole controls">
       <button
         type="button"
         class="panel-toggle hide-panel"
@@ -20,20 +20,26 @@
         ×
       </button>
       <label>
-        <input v-model="finishEnabled" type="checkbox" :disabled="controlsDisabled">
-        Finish (bloom)
-      </label>
-      <label>
         <input v-model="spinEnabled" type="checkbox" :disabled="controlsDisabled">
         Spin accretion disk
       </label>
+      <label class="mass-control">
+        Mass
+        <input v-model.number="mass" type="range" min="0.35" max="1.5" step="0.05" :disabled="controlsDisabled">
+        <output>{{ Math.round(mass * 100) }}%</output>
+      </label>
+      <label class="radius-control">
+        Bloom
+        <input v-model.number="bloom" type="range" min="0" max="2" step="0.05" :disabled="controlsDisabled">
+        <output>{{ bloom.toFixed(2) }}</output>
+      </label>
       <label class="speed-control">
         Speed
-        <input v-model.number="speed" type="range" min="0" max="3" step="0.1" :disabled="controlsDisabled">
+        <input v-model.number="speed" type="range" min="0" max="5" step="0.1" :disabled="controlsDisabled">
       </label>
-      <label class="color-control">
-        Color
-        <input v-model.number="colorMix" type="range" min="0" max="1" step="0.01" :disabled="controlsDisabled">
+      <label class="temperature-control">
+        Temperature
+        <input v-model.number="temperature" type="range" min="0" max="1" step="0.01" :disabled="controlsDisabled">
       </label>
       <label class="radius-control">
         Brightness
@@ -41,9 +47,9 @@
         <output>{{ brightness.toFixed(1) }}</output>
       </label>
       <label class="radius-control">
-        Rotation
-        <input v-model.number="rotation" type="range" min="-180" max="180" step="0.5" :disabled="controlsDisabled">
-        <output>{{ rotation.toFixed(1) }}°</output>
+        Roll
+        <input v-model.number="roll" type="range" min="-180" max="180" step="0.5" :disabled="controlsDisabled">
+        <output>{{ roll.toFixed(1) }}°</output>
       </label>
       <label class="radius-control">
         Pitch
@@ -75,17 +81,14 @@
         <input v-model.number="rOut" type="range" min="18" max="88" step="1" :disabled="controlsDisabled">
         <output>{{ rOut }}</output>
       </label>
-      <label class="mass-control">
-        Mass
-        <input v-model.number="mass" type="range" min="0.35" max="1.5" step="0.05" :disabled="controlsDisabled">
-        <output>{{ Math.round(mass * 100) }}%</output>
-      </label>
-      <button type="button" class="reset-button" :disabled="controlsDisabled" @click="centerHole">
-        Center
-      </button>
-      <button type="button" class="reset-button" :disabled="controlsDisabled" @click="resetControls">
-        Reset
-      </button>
+      <div class="button-row">
+        <button type="button" class="reset-button" :disabled="controlsDisabled" @click="centerHole">
+          Center
+        </button>
+        <button type="button" class="reset-button" :disabled="controlsDisabled" @click="resetControls">
+          Reset
+        </button>
+      </div>
       <span v-if="status" role="status">{{ status }}</span>
     </section>
     <canvas
@@ -139,9 +142,11 @@ const R_OUT_MAX = 88
 const BASE_SHADOW_PX = 122 / 736 * WIDTH
 const CX = 580 / 736 * WIDTH
 const CY = 110 / 414 * HEIGHT
-const ROTATION_SNAP = 2
+const ROLL_SNAP = 2
 const MAX_INCL = 89 * Math.PI / 180
 const SPIN_RATE = 0.5
+// Max shear (radians between inner and outer disk) before the texture is cross-faded back
+const SHEAR_CYCLE = 2 * Math.PI
 const SHEAR = 1.0
 const TAU = 2 * Math.PI
 const STOPS = [
@@ -164,13 +169,13 @@ const BLOOM_LODS = [Math.log2(6), Math.log2(20), Math.log2(10)]
 
 const canvas = ref(null)
 const DEFAULTS = {
-  finishEnabled: true,
+  bloom: 1,
   spinEnabled: true,
   speed: 1,
   mass: 1,
-  colorMix: 0,
+  temperature: 0,
   brightness: 1.3,
-  rotation: 15.5,
+  roll: 15.5,
   pitch: 84,
   yaw: 0,
   detail: 8,
@@ -179,13 +184,13 @@ const DEFAULTS = {
   rOut: 48,
 }
 
-const finishEnabled = ref(DEFAULTS.finishEnabled)
+const bloom = ref(DEFAULTS.bloom)
 const spinEnabled = ref(DEFAULTS.spinEnabled)
 const speed = ref(DEFAULTS.speed)
 const mass = ref(DEFAULTS.mass)
-const colorMix = ref(DEFAULTS.colorMix)
+const temperature = ref(DEFAULTS.temperature)
 const brightness = ref(DEFAULTS.brightness)
-const rotation = ref(DEFAULTS.rotation)
+const roll = ref(DEFAULTS.roll)
 const pitch = ref(DEFAULTS.pitch)
 const yaw = ref(DEFAULTS.yaw)
 const detail = ref(DEFAULTS.detail)
@@ -222,7 +227,14 @@ let needsTrace = true
 let dirty = true
 let mounted = false
 
-watch([finishEnabled, spinEnabled, speed, colorMix, brightness], () => {
+// Panel colours follow the disk palette: the 0.66 stop for the accent, the 0.86 stop for text
+const stopColor = (warm, cool) => `rgb(${warm.map((v, i) => Math.round(v + (cool[i] - v) * temperature.value)).join(', ')})`
+const panelColors = computed(() => ({
+  '--panel-accent': stopColor(STOPS[3].slice(1), BLUE_STOPS[3].slice(1)),
+  '--panel-ink': stopColor(STOPS[4].slice(1), BLUE_STOPS[4].slice(1)),
+}))
+
+watch([bloom, spinEnabled, speed, temperature, brightness], () => {
   dirty = true
 })
 
@@ -233,11 +245,11 @@ watch(mass, () => {
   dirty = true
 })
 
-watch(rotation, (value) => {
-  if (value !== 0 && Math.abs(value) <= ROTATION_SNAP) rotation.value = 0
+watch(roll, (value) => {
+  if (value !== 0 && Math.abs(value) <= ROLL_SNAP) roll.value = 0
 })
 
-watch([rIn, rOut, rotation, pitch, yaw], () => {
+watch([rIn, rOut, roll, pitch, yaw], () => {
   needsTrace = true
   dirty = true
 })
@@ -412,8 +424,10 @@ uniform sampler2D uTrace3;
 uniform sampler2D uDisk;
 uniform float uUnit;
 uniform float uShadowPx;
-uniform float uRotation;
-uniform float uColor;
+uniform float uPhaseA;
+uniform float uPhaseB;
+uniform float uMixA;
+uniform float uTemperature;
 uniform float uBrightness;
 out vec4 outColor;
 
@@ -424,7 +438,7 @@ vec3 palette(float value) {
     if (value > STOP_T[i + 1]) s = i + 1;
   }
   float t = clamp((value - STOP_T[s]) / (STOP_T[s + 1] - STOP_T[s]), 0.0, 1.0);
-  return mix(mix(WARM[s], WARM[s + 1], t), mix(COOL[s], COOL[s + 1], t), uColor);
+  return mix(mix(WARM[s], WARM[s + 1], t), mix(COOL[s], COOL[s + 1], t), uTemperature);
 }
 
 void loadTrace(ivec2 p, out float g[16]) {
@@ -457,25 +471,33 @@ void main() {
     int k = i * 5;
     float edge = g[k + 4];
     if (edge <= 0.0) continue;
-    float angle = g[k + 1] - g[k + 2] * uRotation;
-    angle -= TAU * floor((angle + PI) / TAU);
-    vec2 uv = vec2((angle + PI) / TAU + 0.5 / TEXTURE_ANGLES, (g[k] + 0.5) / TEXTURE_RADII);
+    // Differential rotation shears the texture without bound, so it is sampled
+    // at two phases that each wrap every cycle and are cross-faded; each layer
+    // has zero weight at the moment it resets.
+    vec2 disk = vec2(0.0);
+    for (int layer = 0; layer < 2; layer += 1) {
+      float phase = layer == 0 ? uPhaseA : uPhaseB;
+      float layerWeight = layer == 0 ? uMixA : 1.0 - uMixA;
+      float angle = g[k + 1] - g[k + 2] * phase;
+      angle -= TAU * floor((angle + PI) / TAU);
+      vec2 uv = vec2((angle + PI) / TAU + 0.5 / TEXTURE_ANGLES, (g[k] + 0.5) / TEXTURE_RADII);
 
-    // Screen-space texture gradients from the neighbouring rays, so the disk
-    // texture is mip/anisotropically filtered instead of aliasing into moire.
-    vec2 duvX = vec2(0.0);
-    vec2 duvY = vec2(0.0);
-    if (gx[k + 4] > 0.0) {
-      float da = wrapDelta(gx[k + 1] - g[k + 1]) - (gx[k + 2] - g[k + 2]) * uRotation;
-      duvX = vec2(da / TAU, (gx[k] - g[k]) / TEXTURE_RADII);
+      // Screen-space texture gradients from the neighbouring rays, so the disk
+      // texture is mip/anisotropically filtered instead of aliasing into moire.
+      vec2 duvX = vec2(0.0);
+      vec2 duvY = vec2(0.0);
+      if (gx[k + 4] > 0.0) {
+        float da = wrapDelta(gx[k + 1] - g[k + 1]) - (gx[k + 2] - g[k + 2]) * phase;
+        duvX = vec2(da / TAU, (gx[k] - g[k]) / TEXTURE_RADII);
+      }
+      if (gy[k + 4] > 0.0) {
+        float da = wrapDelta(gy[k + 1] - g[k + 1]) - (gy[k + 2] - g[k + 2]) * phase;
+        duvY = vec2(da / TAU, (gy[k] - g[k]) / TEXTURE_RADII);
+      }
+      duvX = clamp(duvX, vec2(-0.04), vec2(0.04));
+      duvY = clamp(duvY, vec2(-0.04), vec2(0.04));
+      disk += layerWeight * textureGrad(uDisk, uv, duvX, duvY).rg;
     }
-    if (gy[k + 4] > 0.0) {
-      float da = wrapDelta(gy[k + 1] - g[k + 1]) - (gy[k + 2] - g[k + 2]) * uRotation;
-      duvY = vec2(da / TAU, (gy[k] - g[k]) / TEXTURE_RADII);
-    }
-    duvX = clamp(duvX, vec2(-0.04), vec2(0.04));
-    duvY = clamp(duvY, vec2(-0.04), vec2(0.04));
-    vec2 disk = textureGrad(uDisk, uv, duvX, duvY).rg;
     float opacity = disk.g * edge;
     light += transmittance * opacity * g[i * 5 + 3] * disk.r;
     transmittance *= 1.0 - opacity;
@@ -502,7 +524,7 @@ void main() {
 
 const COMPOSITE_SOURCE = `${SHADER_HEAD}
 uniform sampler2D uScene;
-uniform float uFinish;
+uniform float uBloom;
 uniform float uShadowPx;
 out vec4 outColor;
 
@@ -521,12 +543,12 @@ vec3 blurLod(vec2 uv, float lod) {
 void main() {
   vec2 uv = gl_FragCoord.xy / vec2(W, H);
   vec3 color = textureLod(uScene, uv, 0.0).rgb;
-  if (uFinish > 0.5) {
-    color += 0.45 * blurLod(uv, ${f(BLOOM_LODS[0])});
-    color += 0.55 * blurLod(uv, ${f(BLOOM_LODS[1])});
+  if (uBloom > 0.0) {
+    color += uBloom * 0.45 * blurLod(uv, ${f(BLOOM_LODS[0])});
+    color += uBloom * 0.55 * blurLod(uv, ${f(BLOOM_LODS[1])});
     float t = length(pixelCoord() - vec2(CX, CY + uShadowPx * 0.95)) / (uShadowPx * 1.5);
     float mask = t < 0.5 ? 1.0 - 0.8 * t : max(0.0, 0.6 - 1.2 * (t - 0.5));
-    color += 4.0 * mask * blurLod(uv, ${f(BLOOM_LODS[2])});
+    color += uBloom * 4.0 * mask * blurLod(uv, ${f(BLOOM_LODS[2])});
   }
   float n1 = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   float n2 = fract(sin(dot(gl_FragCoord.xy + vec2(19.19, 7.7), vec2(12.9898, 78.233))) * 43758.5453);
@@ -589,13 +611,13 @@ onBeforeUnmount(() => {
 })
 
 function resetControls() {
-  finishEnabled.value = DEFAULTS.finishEnabled
+  bloom.value = DEFAULTS.bloom
   spinEnabled.value = DEFAULTS.spinEnabled
   speed.value = DEFAULTS.speed
   mass.value = DEFAULTS.mass
-  colorMix.value = DEFAULTS.colorMix
+  temperature.value = DEFAULTS.temperature
   brightness.value = DEFAULTS.brightness
-  rotation.value = DEFAULTS.rotation
+  roll.value = DEFAULTS.roll
   pitch.value = DEFAULTS.pitch
   yaw.value = DEFAULTS.yaw
   detail.value = DEFAULTS.detail
@@ -608,7 +630,7 @@ function resetControls() {
 
 // The lensing is spherically symmetric, so only the disk normal relative to
 // the line of sight matters. Pitch tips the normal toward the viewer, yaw
-// swings it left/right, and rotation rolls the result around the view axis.
+// swings it left/right, and roll rotates the result around the view axis.
 // Reduce that to the inclination and screen tilt the shaders understand.
 function viewAngles() {
   const pitchRad = pitch.value * Math.PI / 180
@@ -618,7 +640,7 @@ function viewAngles() {
   const normalZ = Math.cos(pitchRad) * Math.cos(yawRad)
   return {
     incl: Math.min(Math.acos(clamp(normalZ, -1, 1)), MAX_INCL),
-    tilt: Math.atan2(-normalX, normalY) + rotation.value * Math.PI / 180,
+    tilt: Math.atan2(-normalX, normalY) + roll.value * Math.PI / 180,
   }
 }
 
@@ -842,8 +864,13 @@ function shadeScene() {
   gl.uniform1f(uniforms.uTilt, viewAngles().tilt)
   gl.uniform1f(uniforms.uUnit, unit)
   gl.uniform1f(uniforms.uShadowPx, shadowPx)
-  gl.uniform1f(uniforms.uRotation, spinTime * SPIN_RATE)
-  gl.uniform1f(uniforms.uColor, colorMix.value)
+  const cycle = (spinTime * SPIN_RATE) / SHEAR_CYCLE
+  const cycleA = cycle - Math.floor(cycle)
+  const cycleB = (cycle + 0.5) - Math.floor(cycle + 0.5)
+  gl.uniform1f(uniforms.uPhaseA, cycleA * SHEAR_CYCLE)
+  gl.uniform1f(uniforms.uPhaseB, cycleB * SHEAR_CYCLE)
+  gl.uniform1f(uniforms.uMixA, Math.sin(Math.PI * cycleA) ** 2)
+  gl.uniform1f(uniforms.uTemperature, temperature.value)
   gl.uniform1f(uniforms.uBrightness, brightness.value)
   drawPass(sceneFramebuffer)
   bindTexture(0, sceneTexture)
@@ -856,7 +883,7 @@ function compositeScene() {
   bindTexture(0, sceneTexture)
   gl.uniform1i(uniforms.uScene, 0)
   gl.uniform2f(uniforms.uCenter, centerX, centerY)
-  gl.uniform1f(uniforms.uFinish, finishEnabled.value ? 1 : 0)
+  gl.uniform1f(uniforms.uBloom, bloom.value)
   gl.uniform1f(uniforms.uShadowPx, shadowPx)
   drawPass(null)
 }
@@ -939,9 +966,10 @@ body,
   border-radius: 6px;
   opacity: 0.5;
   background: rgba(0, 0, 0, 0.1);
-  color: #e8d6c0;
+  color: var(--panel-ink, #e8d6c0);
   font: 13px ui-sans-serif, system-ui, sans-serif;
   user-select: none;
+  accent-color: var(--panel-accent, #ee9648);
 }
 
 .control-panel label {
@@ -951,24 +979,36 @@ body,
   cursor: pointer;
 }
 
+.control-panel .speed-control,
+.control-panel .temperature-control,
+.control-panel .radius-control,
+.control-panel .mass-control {
+  display: grid;
+  grid-template-columns: 76px 110px 40px;
+}
+
 .control-panel .speed-control input,
-.control-panel .color-control input,
+.control-panel .temperature-control input,
 .control-panel .radius-control input,
 .control-panel .mass-control input {
-  width: 110px;
+  width: 100%;
+  margin: 0;
 }
 
 .control-panel .radius-control output,
 .control-panel .mass-control output {
-  min-width: 34px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
+.control-panel .button-row {
+  display: flex;
+  gap: 6px;
+}
+
 .control-panel .reset-button {
-  align-self: flex-start;
   padding: 3px 10px;
-  border: 1px solid rgba(232, 214, 192, 0.4);
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
   border-radius: 4px;
   background: transparent;
   color: inherit;
