@@ -1,13 +1,31 @@
 <template>
   <main class="black-hole-stage">
-    <section class="control-panel" :class="{ busy }" aria-label="Black hole controls">
+    <button
+      v-if="panelHidden"
+      type="button"
+      class="panel-toggle show-panel"
+      aria-label="Show controls"
+      @click="panelHidden = false"
+    >
+      Controls
+    </button>
+    <section v-show="!panelHidden" class="control-panel" :class="{ busy }" aria-label="Black hole controls">
+      <button
+        type="button"
+        class="panel-toggle hide-panel"
+        aria-label="Hide controls"
+        title="Hide controls"
+        @click="panelHidden = true"
+      >
+        ×
+      </button>
       <label>
         <input v-model="finishEnabled" type="checkbox" :disabled="controlsDisabled">
         Finish (bloom)
       </label>
       <label>
         <input v-model="spinEnabled" type="checkbox" :disabled="controlsDisabled">
-        Spin disk
+        Spin accretion disk
       </label>
       <label class="speed-control">
         Speed
@@ -18,8 +36,38 @@
         <input v-model.number="colorMix" type="range" min="0" max="1" step="0.01" :disabled="controlsDisabled">
       </label>
       <label class="radius-control">
+        Brightness
+        <input v-model.number="brightness" type="range" min="0" max="3" step="0.1" :disabled="controlsDisabled">
+        <output>{{ brightness.toFixed(1) }}</output>
+      </label>
+      <label class="radius-control">
+        Rotation
+        <input v-model.number="rotation" type="range" min="-180" max="180" step="0.5" :disabled="controlsDisabled">
+        <output>{{ rotation.toFixed(1) }}°</output>
+      </label>
+      <label class="radius-control">
+        Pitch
+        <input v-model.number="pitch" type="range" min="0" max="89" step="1" :disabled="controlsDisabled">
+        <output>{{ pitch }}°</output>
+      </label>
+      <label class="radius-control">
+        Yaw
+        <input v-model.number="yaw" type="range" min="-90" max="90" step="1" :disabled="controlsDisabled">
+        <output>{{ yaw }}°</output>
+      </label>
+      <label class="radius-control">
+        Detail
+        <input v-model.number="detail" type="range" min="1" max="12" step="0.5" :disabled="controlsDisabled" @change="rebuildDiskTexture">
+        <output>{{ detail.toFixed(1) }}</output>
+      </label>
+      <label class="radius-control">
+        Contrast
+        <input v-model.number="contrast" type="range" min="0.5" max="3" step="0.1" :disabled="controlsDisabled" @change="rebuildDiskTexture">
+        <output>{{ contrast.toFixed(1) }}</output>
+      </label>
+      <label class="radius-control">
         R in
-        <input v-model.number="rIn" type="range" min="2.5" max="4.4" step="0.1" :disabled="controlsDisabled">
+        <input v-model.number="rIn" type="range" min="2.5" max="6" step="0.1" :disabled="controlsDisabled">
         <output>{{ rIn.toFixed(1) }}</output>
       </label>
       <label class="radius-control">
@@ -32,6 +80,9 @@
         <input v-model.number="size" type="range" min="0.35" max="1.5" step="0.05" :disabled="controlsDisabled">
         <output>{{ Math.round(size * 100) }}%</output>
       </label>
+      <button type="button" class="reset-button" :disabled="controlsDisabled" @click="centerHole">
+        Center
+      </button>
       <button type="button" class="reset-button" :disabled="controlsDisabled" @click="resetControls">
         Reset
       </button>
@@ -44,28 +95,61 @@
       :height="HEIGHT"
       aria-label="Spinning ray-traced black hole and accretion disk"
     />
+    <aside class="info-box" :class="{ open: infoOpen }" aria-label="About this render">
+      <button
+        type="button"
+        class="info-toggle"
+        :aria-expanded="infoOpen"
+        :aria-label="infoOpen ? 'Hide information' : 'Show information'"
+        :title="infoOpen ? 'Hide information' : 'How this is made'"
+        @click="infoOpen = !infoOpen"
+      >
+        {{ infoOpen ? '×' : '!' }}
+      </button>
+      <div v-show="infoOpen" class="info-content">
+      <h2>How this is made</h2>
+      <p>
+        Nothing here is a video or a 3D model. Every pixel fires a light ray backwards from the
+        camera and bends it through the curved space around a non-rotating (Schwarzschild) black
+        hole, using a numerical solver (RK4) running in a WebGL2 shader on your GPU.
+      </p>
+      <p>
+        Where a ray crosses the accretion disk plane, it picks up the disk's colour and
+        brightness. Rays can cross more than once, which gives the glowing arc that appears
+        over the top and under the hole (the far side of the disk, bent into view).
+      </p>
+      <p>
+        The disk is a procedural noise texture, sheared so the inside orbits faster than the
+        outside. Doppler shift and gravitational redshift make the approaching side brighter and
+        the colours shift. A final bloom pass adds the glow.
+      </p>
+      <p>
+        Copyright 2026 Paul Rid (paul.s.rid@pm.me).
+      </p>
+      </div>
+    </aside>
   </main>
 </template>
 
 <script setup>
 const WIDTH = 1280
 const HEIGHT = 720
-const INCL = 84 * Math.PI / 180
-const TILT = 0.27
 const R_IN_MIN = 2.5
 const R_OUT_MAX = 88
 const BASE_SHADOW_PX = 122 / 736 * WIDTH
 const CX = 580 / 736 * WIDTH
 const CY = 110 / 414 * HEIGHT
+const ROTATION_SNAP = 2
+const MAX_INCL = 89 * Math.PI / 180
 const SPIN_RATE = 0.5
 const SHEAR = 1.0
 const TAU = 2 * Math.PI
 const STOPS = [
-  [0, 5, 3, 3], [0.18, 46, 22, 11], [0.42, 150, 76, 30],
+  [0, 0, 0, 0], [0.18, 46, 22, 11], [0.42, 150, 76, 30],
   [0.66, 238, 150, 72], [0.86, 255, 215, 160], [1.05, 255, 250, 240],
 ]
 const BLUE_STOPS = [
-  [0, 3, 4, 8], [0.18, 12, 28, 60], [0.42, 40, 100, 190],
+  [0,0, 0, 0], [0.18, 12, 28, 60], [0.42, 40, 100, 190],
   [0.66, 120, 180, 240], [0.86, 205, 230, 255], [1.05, 250, 253, 255],
 ]
 const LUT_MAX = 1.05
@@ -85,7 +169,13 @@ const DEFAULTS = {
   speed: 1,
   size: 1,
   colorMix: 0,
-  rIn: 3.4,
+  brightness: 1.3,
+  rotation: 15.5,
+  pitch: 84,
+  yaw: 0,
+  detail: 8,
+  contrast: 1.4,
+  rIn: 4.4,
   rOut: 48,
 }
 
@@ -94,8 +184,16 @@ const spinEnabled = ref(DEFAULTS.spinEnabled)
 const speed = ref(DEFAULTS.speed)
 const size = ref(DEFAULTS.size)
 const colorMix = ref(DEFAULTS.colorMix)
+const brightness = ref(DEFAULTS.brightness)
+const rotation = ref(DEFAULTS.rotation)
+const pitch = ref(DEFAULTS.pitch)
+const yaw = ref(DEFAULTS.yaw)
+const detail = ref(DEFAULTS.detail)
+const contrast = ref(DEFAULTS.contrast)
 const rIn = ref(DEFAULTS.rIn)
 const rOut = ref(DEFAULTS.rOut)
+const panelHidden = ref(true)
+const infoOpen = ref(false)
 const busy = ref(true)
 const controlsDisabled = ref(true)
 const status = ref('Computing…')
@@ -103,6 +201,7 @@ const status = ref('Computing…')
 let gl
 let vao
 let diskTexture
+let builtTexture
 let traceTextures = []
 let traceFramebuffer
 let sceneTexture
@@ -116,12 +215,14 @@ let fixedTime = null
 let lastFrameTime = 0
 let spinTime = 0
 let shadowPx = BASE_SHADOW_PX
+let centerX = CX
+let centerY = CY
 let unit = shadowPx / 5.196
 let needsTrace = true
 let dirty = true
 let mounted = false
 
-watch([finishEnabled, spinEnabled, speed, colorMix], () => {
+watch([finishEnabled, spinEnabled, speed, colorMix, brightness], () => {
   dirty = true
 })
 
@@ -132,7 +233,11 @@ watch(size, () => {
   dirty = true
 })
 
-watch([rIn, rOut], () => {
+watch(rotation, (value) => {
+  if (value !== 0 && Math.abs(value) <= ROTATION_SNAP) rotation.value = 0
+})
+
+watch([rIn, rOut, rotation, pitch, yaw], () => {
   needsTrace = true
   dirty = true
 })
@@ -150,24 +255,24 @@ const float PI = ${f(Math.PI)};
 const float TAU = ${f(TAU)};
 const float W = ${f(WIDTH)};
 const float H = ${f(HEIGHT)};
-const float CX = ${f(CX)};
-const float CY = ${f(CY)};
+uniform vec2 uCenter;
+#define CX uCenter.x
+#define CY uCenter.y
 const float TEX_MIN = ${f(TEX_MIN)};
 const float TEX_STEP = ${f(TEX_STEP)};
 const float TEXTURE_RADII = ${f(TEXTURE_RADII)};
 const float TEXTURE_ANGLES = ${f(TEXTURE_ANGLES)};
 const float SHEAR = ${f(SHEAR)};
-const float SIN_INCL = ${f(Math.sin(INCL))};
-const float COS_INCL = ${f(Math.cos(INCL))};
-const float SIN_TILT = ${f(Math.sin(TILT))};
-const float COS_TILT = ${f(Math.cos(TILT))};
+uniform float uTilt;
 vec2 pixelCoord() {
   return vec2(gl_FragCoord.x - 0.5, H - 0.5 - gl_FragCoord.y);
 }
 vec2 rayCoord(vec2 pix, float unitPx) {
   float screenX = (pix.x - CX) / unitPx;
   float screenY = -(pix.y - CY) / unitPx;
-  return vec2(screenX * COS_TILT + screenY * SIN_TILT, -screenX * SIN_TILT + screenY * COS_TILT);
+  float sinTilt = sin(uTilt);
+  float cosTilt = cos(uTilt);
+  return vec2(screenX * cosTilt + screenY * sinTilt, -screenX * sinTilt + screenY * cosTilt);
 }
 `
 
@@ -188,6 +293,7 @@ const float SD_N = ${f(Math.sin(STEP_NEAR))};
 uniform float uUnit;
 uniform float uRIn;
 uniform float uROut;
+uniform float uIncl;
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
 layout(location = 2) out vec4 o2;
@@ -195,6 +301,8 @@ layout(location = 3) out vec4 o3;
 
 float gData[16];
 int gCount = 0;
+float SIN_INCL = 0.0;
+float COS_INCL = 1.0;
 
 void record(float radius, float angle) {
   float edge = smoothstep(uRIn, uRIn + 0.7, radius)
@@ -206,7 +314,7 @@ void record(float radius, float angle) {
   float gamma = 1.0 / sqrt(1.0 - velocity * velocity);
   float velocityAlongSight = -velocity * sin(angle) * SIN_INCL;
   float redshift = sqrt(1.0 - 2.0 / radius) / (gamma * (1.0 - velocityAlongSight));
-  float textureAngle = angle + 1.6 * log(radius);
+  float textureAngle = angle;
   textureAngle -= TAU * floor((textureAngle + PI) / TAU);
   int base = gCount * 5;
 
@@ -283,6 +391,8 @@ void traceRay(vec2 p) {
 
 void main() {
   for (int i = 0; i < 16; i += 1) gData[i] = 0.0;
+  SIN_INCL = sin(uIncl);
+  COS_INCL = cos(uIncl);
   traceRay(rayCoord(pixelCoord(), uUnit));
   o0 = vec4(gData[0], gData[1], gData[2], gData[3]);
   o1 = vec4(gData[4], gData[5], gData[6], gData[7]);
@@ -304,6 +414,7 @@ uniform float uUnit;
 uniform float uShadowPx;
 uniform float uRotation;
 uniform float uColor;
+uniform float uBrightness;
 out vec4 outColor;
 
 vec3 palette(float value) {
@@ -316,25 +427,55 @@ vec3 palette(float value) {
   return mix(mix(WARM[s], WARM[s + 1], t), mix(COOL[s], COOL[s + 1], t), uColor);
 }
 
-void main() {
-  ivec2 ip = ivec2(gl_FragCoord.xy);
-  vec4 a = texelFetch(uTrace0, ip, 0);
-  vec4 b = texelFetch(uTrace1, ip, 0);
-  vec4 c = texelFetch(uTrace2, ip, 0);
-  vec4 d = texelFetch(uTrace3, ip, 0);
-  float g[16] = float[16](
+void loadTrace(ivec2 p, out float g[16]) {
+  vec4 a = texelFetch(uTrace0, p, 0);
+  vec4 b = texelFetch(uTrace1, p, 0);
+  vec4 c = texelFetch(uTrace2, p, 0);
+  vec4 d = texelFetch(uTrace3, p, 0);
+  g = float[16](
     a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w, c.x, c.y, c.z, c.w, d.x, d.y, d.z, d.w
   );
+}
+
+float wrapDelta(float delta) {
+  return delta - TAU * floor(delta / TAU + 0.5);
+}
+
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  ivec2 maxP = ivec2(int(W) - 1, int(H) - 1);
+  float g[16];
+  float gx[16];
+  float gy[16];
+  loadTrace(ip, g);
+  loadTrace(min(ip + ivec2(1, 0), maxP), gx);
+  loadTrace(min(ip + ivec2(0, 1), maxP), gy);
 
   float light = 0.0;
   float transmittance = 1.0;
   for (int i = 0; i < ${MAX_CROSSINGS}; i += 1) {
-    float edge = g[i * 5 + 4];
+    int k = i * 5;
+    float edge = g[k + 4];
     if (edge <= 0.0) continue;
-    float angle = g[i * 5 + 1] - g[i * 5 + 2] * uRotation;
+    float angle = g[k + 1] - g[k + 2] * uRotation;
     angle -= TAU * floor((angle + PI) / TAU);
-    vec2 uv = vec2((angle + PI) / TAU + 0.5 / TEXTURE_ANGLES, (g[i * 5] + 0.5) / TEXTURE_RADII);
-    vec2 disk = texture(uDisk, uv).rg;
+    vec2 uv = vec2((angle + PI) / TAU + 0.5 / TEXTURE_ANGLES, (g[k] + 0.5) / TEXTURE_RADII);
+
+    // Screen-space texture gradients from the neighbouring rays, so the disk
+    // texture is mip/anisotropically filtered instead of aliasing into moire.
+    vec2 duvX = vec2(0.0);
+    vec2 duvY = vec2(0.0);
+    if (gx[k + 4] > 0.0) {
+      float da = wrapDelta(gx[k + 1] - g[k + 1]) - (gx[k + 2] - g[k + 2]) * uRotation;
+      duvX = vec2(da / TAU, (gx[k] - g[k]) / TEXTURE_RADII);
+    }
+    if (gy[k + 4] > 0.0) {
+      float da = wrapDelta(gy[k + 1] - g[k + 1]) - (gy[k + 2] - g[k + 2]) * uRotation;
+      duvY = vec2(da / TAU, (gy[k] - g[k]) / TEXTURE_RADII);
+    }
+    duvX = clamp(duvX, vec2(-0.04), vec2(0.04));
+    duvY = clamp(duvY, vec2(-0.04), vec2(0.04));
+    vec2 disk = textureGrad(uDisk, uv, duvX, duvY).rg;
     float opacity = disk.g * edge;
     light += transmittance * opacity * g[i * 5 + 3] * disk.r;
     transmittance *= 1.0 - opacity;
@@ -354,7 +495,7 @@ void main() {
   float vignetteY = max(0.0, (pix.y - H * 0.8) / (H * 0.4));
   float vignette = 1.0 - 0.5 * clamp(vignetteX * 0.8 + vignetteY, 0.0, 1.0);
 
-  light = (light * 1.25 + added) * vignette;
+  light = (light * uBrightness + added) * vignette;
   outColor = vec4(palette(light), 1.0);
 }
 `
@@ -453,8 +594,43 @@ function resetControls() {
   speed.value = DEFAULTS.speed
   size.value = DEFAULTS.size
   colorMix.value = DEFAULTS.colorMix
+  brightness.value = DEFAULTS.brightness
+  rotation.value = DEFAULTS.rotation
+  pitch.value = DEFAULTS.pitch
+  yaw.value = DEFAULTS.yaw
+  detail.value = DEFAULTS.detail
+  contrast.value = DEFAULTS.contrast
   rIn.value = DEFAULTS.rIn
   rOut.value = DEFAULTS.rOut
+  moveHole(CX, CY)
+  rebuildDiskTexture()
+}
+
+// The lensing is spherically symmetric, so only the disk normal relative to
+// the line of sight matters. Pitch tips the normal toward the viewer, yaw
+// swings it left/right, and rotation rolls the result around the view axis.
+// Reduce that to the inclination and screen tilt the shaders understand.
+function viewAngles() {
+  const pitchRad = pitch.value * Math.PI / 180
+  const yawRad = yaw.value * Math.PI / 180
+  const normalX = Math.cos(pitchRad) * Math.sin(yawRad)
+  const normalY = Math.sin(pitchRad)
+  const normalZ = Math.cos(pitchRad) * Math.cos(yawRad)
+  return {
+    incl: Math.min(Math.acos(clamp(normalZ, -1, 1)), MAX_INCL),
+    tilt: Math.atan2(-normalX, normalY) + rotation.value * Math.PI / 180,
+  }
+}
+
+function moveHole(x, y) {
+  centerX = x
+  centerY = y
+  needsTrace = true
+  dirty = true
+}
+
+function centerHole() {
+  moveHole(WIDTH / 2, HEIGHT / 2)
 }
 
 function hash(x, y) {
@@ -505,16 +681,16 @@ function clamp(value, low, high) {
   return Math.max(low, Math.min(high, value))
 }
 
-function buildDiskTexture() {
+function buildDiskTexture(detail, contrast) {
   const data = new Float32Array(TEXTURE_ANGLES * TEXTURE_RADII * 2)
   for (let radiusIndex = 0; radiusIndex < TEXTURE_RADII; radiusIndex += 1) {
     const radius = TEX_MIN + radiusIndex * TEX_STEP
     for (let angleIndex = 0; angleIndex < TEXTURE_ANGLES; angleIndex += 1) {
       const angle = -Math.PI + angleIndex * TAU / TEXTURE_ANGLES
-      const density = clamp(periodicFbm(angle, 2.3, radius * 0.9) * 1.9, 0, 1.4)
+      const density = clamp(periodicFbm(angle, detail, radius * 0.9) * 1.9, 0, 1.4)
       const grain = periodicNoise(angle, 16, radius * 3)
       const index = (radiusIndex * TEXTURE_ANGLES + angleIndex) * 2
-      data[index] = (0.12 + 1.5 * density ** 1.4) * (0.7 + 0.6 * grain)
+      data[index] = (0.12 + 1.5 * density ** contrast) * (0.7 + 0.6 * grain)
       data[index + 1] = clamp(0.1 + 0.8 * density, 0, 0.9)
     }
   }
@@ -561,6 +737,37 @@ function createTexture(internalFormat, format, type, data, filter, mipmaps = fal
   return texture
 }
 
+function createDiskTexture() {
+  builtTexture = { detail: detail.value, contrast: contrast.value }
+  const data = buildDiskTexture(detail.value, contrast.value)
+  const texture = createTexture(gl.RG16F, gl.RG, gl.FLOAT, data, gl.LINEAR, true)
+  gl.generateMipmap(gl.TEXTURE_2D)
+  const anisotropic = gl.getExtension('EXT_texture_filter_anisotropic')
+  if (anisotropic) {
+    const maxAnisotropy = gl.getParameter(anisotropic.MAX_TEXTURE_MAX_ANISOTROPY_EXT)
+    gl.texParameterf(gl.TEXTURE_2D, anisotropic.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(16, maxAnisotropy))
+  }
+  return texture
+}
+
+function rebuildDiskTexture() {
+  if (!gl || busy.value) return
+  if (builtTexture.detail === detail.value
+    && builtTexture.contrast === contrast.value) return
+  busy.value = true
+  controlsDisabled.value = true
+  status.value = 'Computing…'
+  window.setTimeout(() => {
+    if (!mounted) return
+    gl.deleteTexture(diskTexture)
+    diskTexture = createDiskTexture()
+    status.value = ''
+    busy.value = false
+    controlsDisabled.value = false
+    dirty = true
+  }, 30)
+}
+
 function checkFramebuffer(name) {
   if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
     throw new Error(`${name} framebuffer is incomplete`)
@@ -577,7 +784,7 @@ function initGpu() {
   shadeProgram = createProgram(SHADE_SOURCE)
   compositeProgram = createProgram(COMPOSITE_SOURCE)
 
-  diskTexture = createTexture(gl.RG16F, gl.RG, gl.FLOAT, buildDiskTexture(), gl.LINEAR)
+  diskTexture = createDiskTexture()
 
   traceFramebuffer = gl.createFramebuffer()
   gl.bindFramebuffer(gl.FRAMEBUFFER, traceFramebuffer)
@@ -612,6 +819,10 @@ function drawPass(framebuffer) {
 
 function traceRays() {
   gl.useProgram(traceProgram.program)
+  gl.uniform2f(traceProgram.uniforms.uCenter, centerX, centerY)
+  const view = viewAngles()
+  gl.uniform1f(traceProgram.uniforms.uTilt, view.tilt)
+  gl.uniform1f(traceProgram.uniforms.uIncl, view.incl)
   gl.uniform1f(traceProgram.uniforms.uUnit, unit)
   gl.uniform1f(traceProgram.uniforms.uRIn, rIn.value)
   gl.uniform1f(traceProgram.uniforms.uROut, rOut.value)
@@ -627,10 +838,13 @@ function shadeScene() {
   })
   bindTexture(4, diskTexture)
   gl.uniform1i(uniforms.uDisk, 4)
+  gl.uniform2f(uniforms.uCenter, centerX, centerY)
+  gl.uniform1f(uniforms.uTilt, viewAngles().tilt)
   gl.uniform1f(uniforms.uUnit, unit)
   gl.uniform1f(uniforms.uShadowPx, shadowPx)
   gl.uniform1f(uniforms.uRotation, spinTime * SPIN_RATE)
   gl.uniform1f(uniforms.uColor, colorMix.value)
+  gl.uniform1f(uniforms.uBrightness, brightness.value)
   drawPass(sceneFramebuffer)
   bindTexture(0, sceneTexture)
   gl.generateMipmap(gl.TEXTURE_2D)
@@ -641,6 +855,7 @@ function compositeScene() {
   gl.useProgram(program)
   bindTexture(0, sceneTexture)
   gl.uniform1i(uniforms.uScene, 0)
+  gl.uniform2f(uniforms.uCenter, centerX, centerY)
   gl.uniform1f(uniforms.uFinish, finishEnabled.value ? 1 : 0)
   gl.uniform1f(uniforms.uShadowPx, shadowPx)
   drawPass(null)
@@ -714,7 +929,7 @@ body,
 
 .control-panel {
   position: fixed;
-  top: 12px;
+  bottom: 12px;
   left: 12px;
   z-index: 1;
   display: flex;
@@ -722,7 +937,8 @@ body,
   gap: 6px;
   padding: 8px 12px;
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.55);
+  opacity: 0.5;
+  background: rgba(0, 0, 0, 0.1);
   color: #e8d6c0;
   font: 13px ui-sans-serif, system-ui, sans-serif;
   user-select: none;
@@ -763,6 +979,88 @@ body,
 .control-panel .reset-button:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+.info-box {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1;
+  color: #e8d6c0;
+  font: 12px/1.45 ui-sans-serif, system-ui, sans-serif;
+}
+
+.info-box.open {
+  max-width: 300px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.info-toggle {
+  display: block;
+  padding: 3px 10px;
+  border: 1px solid rgba(232, 214, 192, 0.4);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #e8d6c0;
+  font: 13px ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.info-box.open .info-toggle {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  line-height: 1;
+}
+
+.info-box h2 {
+  margin: 0 0 4px;
+  padding-right: 24px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.info-box p {
+  margin: 0 0 6px;
+}
+
+.info-box p:last-child {
+  margin-bottom: 0;
+}
+
+.panel-toggle {
+  border: 1px solid rgba(232, 214, 192, 0.4);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #e8d6c0;
+  font: 13px ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.panel-toggle.hide-panel {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
+  background: transparent;
+}
+
+.panel-toggle.show-panel {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  z-index: 1;
+  padding: 3px 10px;
 }
 
 .control-panel.busy,
