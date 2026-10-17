@@ -75,10 +75,10 @@
         <input v-model.number="rOut" type="range" min="18" max="88" step="1" :disabled="controlsDisabled">
         <output>{{ rOut }}</output>
       </label>
-      <label class="size-control">
-        Size
-        <input v-model.number="size" type="range" min="0.35" max="1.5" step="0.05" :disabled="controlsDisabled">
-        <output>{{ Math.round(size * 100) }}%</output>
+      <label class="mass-control">
+        Mass
+        <input v-model.number="mass" type="range" min="0.35" max="1.5" step="0.05" :disabled="controlsDisabled">
+        <output>{{ Math.round(mass * 100) }}%</output>
       </label>
       <button type="button" class="reset-button" :disabled="controlsDisabled" @click="centerHole">
         Center
@@ -167,7 +167,7 @@ const DEFAULTS = {
   finishEnabled: true,
   spinEnabled: true,
   speed: 1,
-  size: 1,
+  mass: 1,
   colorMix: 0,
   brightness: 1.3,
   rotation: 15.5,
@@ -182,7 +182,7 @@ const DEFAULTS = {
 const finishEnabled = ref(DEFAULTS.finishEnabled)
 const spinEnabled = ref(DEFAULTS.spinEnabled)
 const speed = ref(DEFAULTS.speed)
-const size = ref(DEFAULTS.size)
+const mass = ref(DEFAULTS.mass)
 const colorMix = ref(DEFAULTS.colorMix)
 const brightness = ref(DEFAULTS.brightness)
 const rotation = ref(DEFAULTS.rotation)
@@ -226,8 +226,8 @@ watch([finishEnabled, spinEnabled, speed, colorMix, brightness], () => {
   dirty = true
 })
 
-watch(size, () => {
-  shadowPx = BASE_SHADOW_PX * size.value
+watch(mass, () => {
+  shadowPx = BASE_SHADOW_PX * mass.value
   unit = shadowPx / 5.196
   needsTrace = true
   dirty = true
@@ -592,7 +592,7 @@ function resetControls() {
   finishEnabled.value = DEFAULTS.finishEnabled
   spinEnabled.value = DEFAULTS.spinEnabled
   speed.value = DEFAULTS.speed
-  size.value = DEFAULTS.size
+  mass.value = DEFAULTS.mass
   colorMix.value = DEFAULTS.colorMix
   brightness.value = DEFAULTS.brightness
   rotation.value = DEFAULTS.rotation
@@ -954,12 +954,12 @@ body,
 .control-panel .speed-control input,
 .control-panel .color-control input,
 .control-panel .radius-control input,
-.control-panel .size-control input {
+.control-panel .mass-control input {
   width: 110px;
 }
 
 .control-panel .radius-control output,
-.control-panel .size-control output {
+.control-panel .mass-control output {
   min-width: 34px;
   text-align: right;
   font-variant-numeric: tabular-nums;
