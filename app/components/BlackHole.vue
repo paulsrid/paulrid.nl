@@ -17,7 +17,7 @@
         title="Hide controls"
         @click="panelHidden = true"
       >
-        ×
+        x
       </button>
       <label>
         <input v-model="spinEnabled" type="checkbox" :disabled="controlsDisabled">
@@ -72,9 +72,14 @@
         <output>{{ contrast.toFixed(1) }}</output>
       </label>
       <label class="radius-control">
+        Spin a/M
+        <input v-model.number="spin" type="range" min="0" :max="MAX_SPIN" step="0.002" :disabled="controlsDisabled">
+        <output>{{ spin.toFixed(3) }}</output>
+      </label>
+      <label class="radius-control">
         R in
-        <input v-model.number="rIn" type="range" min="2.5" max="6" step="0.1" :disabled="controlsDisabled">
-        <output>{{ rIn.toFixed(1) }}</output>
+        <input v-model.number="rIn" type="range" :min="R_IN_MIN" max="6" step="0.1" :disabled="controlsDisabled">
+        <output>{{ innerRadius.toFixed(1) }}</output>
       </label>
       <label class="radius-control">
         R out
@@ -113,8 +118,10 @@
       <h2>How this is made</h2>
       <p>
         Nothing here is a video or a 3D model. Every pixel fires a light ray backwards from the
-        camera and bends it through the curved space around a non-rotating (Schwarzschild) black
-        hole, using a numerical solver (RK4) running in a WebGL2 shader on your GPU.
+        camera and bends it through the curved space around a spinning (Kerr) black hole,
+        following the method of James et al., "Gravitational lensing by spinning black holes in
+        astrophysics, and in the movie Interstellar" (2015). A numerical solver (RK4) integrates
+        the light-ray equations in a WebGL2 shader on your GPU. Spin 0 gives a Schwarzschild hole.
       </p>
       <p>
         Where a ray crosses the accretion disk plane, it picks up the disk's colour and
@@ -123,8 +130,9 @@
       </p>
       <p>
         The disk is a procedural noise texture, sheared so the inside orbits faster than the
-        outside. Doppler shift and gravitational redshift make the approaching side brighter and
-        the colours shift. A final bloom pass adds the glow.
+        outside, and it ends at the innermost stable orbit, which moves inward as the spin
+        grows. Doppler shift and gravitational redshift (computed for Kerr circular orbits) make
+        the approaching side brighter and the colours shift. A final bloom pass adds the glow.
       </p>
       <p>
         Copyright 2026 Paul Rid<template v-if="contact">
@@ -136,10 +144,17 @@
 </template>
 
 <script setup>
-const WIDTH = 1280
-const HEIGHT = 720
-const R_IN_MIN = 2.5
+// Internal render size. Every pixel is a traced ray, so cost scales with this;
+// the canvas is stretched to the window, so a larger size gives smoother edges.
+const WIDTH = 1920
+const HEIGHT = 1080
+const R_IN_MIN = 1.2
 const R_OUT_MAX = 88
+const MIN_INCL = 0.1
+const MAX_SPIN = 0.998
+// Geometric units (G = c = M = 1). Rays are captured just outside the horizon,
+// where Boyer-Lindquist coordinates become singular.
+const HORIZON_MARGIN = 0.02
 const BASE_SHADOW_PX = 122 / 736 * WIDTH
 const CX = 580 / 736 * WIDTH
 const CY = 110 / 414 * HEIGHT
@@ -164,9 +179,13 @@ const TEXTURE_RADII = 1024
 const TEX_MIN = R_IN_MIN - 0.2
 const TEX_STEP = (R_OUT_MAX - TEX_MIN) / (TEXTURE_RADII - 1)
 const MAX_CROSSINGS = 3
-const STEP_FAR = 0.06
-const STEP_NEAR = 0.03
-const BLOOM_LODS = [Math.log2(6), Math.log2(20), Math.log2(10)]
+// Bloom is three Gaussian blurs of the scene, each at a reduced resolution
+// (2^level times smaller) so wide blurs stay cheap. Radii are in pixels, tuned
+// at 1280 wide; sigma is about 0.8 of the radius.
+const BLOOM_RADII = [6, 20, 10]
+const BLOOM_LEVELS = [2, 3, 3]
+const BLOOM_SIGMA_SCALE = 0.8 * WIDTH / 1280
+const BLOOM_TAPS = 14
 
 const canvas = ref(null)
 const DEFAULTS = {
@@ -175,14 +194,15 @@ const DEFAULTS = {
   speed: 1,
   mass: 1,
   temperature: 0,
-  brightness: 1.3,
+  brightness: 0.7,
   roll: 15.5,
   pitch: 84,
   yaw: 0,
   detail: 8,
   contrast: 1.4,
-  rIn: 4.4,
-  rOut: 48,
+  rIn: R_IN_MIN,
+  rOut: 36,
+  spin: 0.9,
 }
 
 const bloom = ref(DEFAULTS.bloom)
@@ -198,6 +218,7 @@ const detail = ref(DEFAULTS.detail)
 const contrast = ref(DEFAULTS.contrast)
 const rIn = ref(DEFAULTS.rIn)
 const rOut = ref(DEFAULTS.rOut)
+const spin = ref(DEFAULTS.spin)
 const panelHidden = ref(true)
 const infoOpen = ref(false)
 const busy = ref(true)
@@ -215,6 +236,10 @@ let sceneFramebuffer
 let traceProgram
 let shadeProgram
 let compositeProgram
+let downsampleProgram
+let blurProgram
+let bloomLevels = {}
+let bloomTargets = []
 let frame = 0
 let timer = 0
 let fixedTime = null
@@ -257,7 +282,16 @@ watch(roll, (value) => {
   if (value !== 0 && Math.abs(value) <= ROLL_SNAP) roll.value = 0
 })
 
-watch([rIn, rOut, roll, pitch, yaw], () => {
+// Prograde innermost stable circular orbit of a Kerr hole (Bardeen, Press & Teukolsky 1972).
+// The disk is truncated there, so the "R in" slider only moves the edge outward.
+const iscoRadius = (a) => {
+  const z1 = 1 + Math.cbrt(1 - a * a) * (Math.cbrt(1 + a) + Math.cbrt(1 - a))
+  const z2 = Math.sqrt(3 * a * a + z1 * z1)
+  return 3 + z2 - Math.sqrt((3 - z1) * (3 + z1 + 2 * z2))
+}
+const innerRadius = computed(() => Math.max(rIn.value, iscoRadius(spin.value)))
+
+watch([rIn, rOut, roll, pitch, yaw, spin], () => {
   needsTrace = true
   dirty = true
 })
@@ -304,16 +338,15 @@ void main() {
 `
 
 const TRACE_SOURCE = `${SHADER_HEAD}
-const float STEP_FAR = ${f(STEP_FAR)};
-const float STEP_NEAR = ${f(STEP_NEAR)};
-const float CD_F = ${f(Math.cos(STEP_FAR))};
-const float SD_F = ${f(Math.sin(STEP_FAR))};
-const float CD_N = ${f(Math.cos(STEP_NEAR))};
-const float SD_N = ${f(Math.sin(STEP_NEAR))};
+const int MAX_STEPS = 1000;
+const float STEP_MAX = 0.006;
+const float PHI_PER_STEP = 0.035;
 uniform float uUnit;
 uniform float uRIn;
 uniform float uROut;
 uniform float uIncl;
+uniform float uSpin;
+uniform float uCapture;
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
 layout(location = 2) out vec4 o2;
@@ -321,19 +354,27 @@ layout(location = 3) out vec4 o3;
 
 float gData[16];
 int gCount = 0;
-float SIN_INCL = 0.0;
-float COS_INCL = 1.0;
+// Kerr photon constants for the current ray (E = 1): azimuthal momentum L,
+// Carter constant Q, and the combinations used by the radial potential.
+float gL = 0.0;
+float gC = 0.0;
+float gK = 0.0;
 
+// Disk emission at a crossing of the equatorial plane. Matter on a prograde
+// circular Kerr orbit has angular velocity W = 1 / (r^1.5 + a) and time
+// dilation u^t, so a photon with angular momentum L reaches infinity with
+// g = 1 / (u^t (1 - W L)): one factor covering Doppler and gravitational shift.
 void record(float radius, float angle) {
   float edge = smoothstep(uRIn, uRIn + 0.7, radius)
     * (1.0 - smoothstep(uROut * 0.35, uROut, radius));
   if (edge <= 0.001) return;
 
   float intensity = pow(uRIn / radius, 2.1);
-  float velocity = min(0.6, 1.0 / sqrt(radius - 2.0));
-  float gamma = 1.0 / sqrt(1.0 - velocity * velocity);
-  float velocityAlongSight = -velocity * sin(angle) * SIN_INCL;
-  float redshift = sqrt(1.0 - 2.0 / radius) / (gamma * (1.0 - velocityAlongSight));
+  float r15 = radius * sqrt(radius);
+  float root = max(r15 - 3.0 * sqrt(radius) + 2.0 * uSpin, 0.05);
+  float timeDilation = (r15 + uSpin) / (sqrt(r15) * sqrt(root));
+  float omega = 1.0 / (r15 + uSpin);
+  float redshift = clamp(1.0 / (timeDilation * (1.0 - omega * gL)), 0.05, 2.0);
   float textureAngle = angle;
   textureAngle -= TAU * floor((textureAngle + PI) / TAU);
   int base = gCount * 5;
@@ -346,80 +387,132 @@ void record(float radius, float angle) {
   gCount += 1;
 }
 
-void traceRay(vec2 p) {
-  float impact = length(p);
-  if (impact < 1e-3) return;
+// Radial part: with u = 1/r and ' = d/d(Mino time), (u')^2 = U(u) for Kerr null
+// geodesics, so u'' = U'/2 needs no turning-point logic.
+float dU(float u) {
+  float u2 = u * u;
+  return 4.0 * gC * u * (1.0 + gC * u2)
+    - gK * (2.0 * u - 6.0 * u2 + 4.0 * uSpin * uSpin * u * u2);
+}
 
-  float e2x = -p.y * COS_INCL / impact;
-  float e2y = p.x / impact;
-  float e2z = p.y * SIN_INCL / impact;
+// Azimuth gained from the radial motion (frame dragging), traced backwards.
+// The rest of the azimuth comes from the angular direction vector below.
+float dExtra(float u) {
+  float ratio = (1.0 + gC * u * u) / (1.0 - 2.0 * u + uSpin * uSpin * u * u);
+  return uSpin * (1.0 - ratio);
+}
+
+// Angular part: the direction n on the unit sphere moves like a particle in the
+// potential -a^2 mu^2 / 2 (mu = n.z). Integrating the 3D vector instead of
+// (theta, phi) avoids the L / sin^2(theta) singularity at the poles, which made
+// rays passing near the spin axis numerically unstable.
+vec3 angularAccel(vec3 n, vec3 v) {
+  float mu = n.z;
+  return -dot(v, v) * n + uSpin * uSpin * mu * (vec3(0.0, 0.0, 1.0) - mu * n);
+}
+
+void traceRay(vec2 screen, float cosObs, float sinObs) {
+  float alpha = screen.x;
+  float beta = screen.y;
+  if (alpha * alpha + beta * beta < 1e-6) return;
+
+  gL = -alpha * sinObs;
+  float q = beta * beta + cosObs * cosObs * (alpha * alpha - uSpin * uSpin);
+  gC = uSpin * uSpin - uSpin * gL;
+  gK = (gL - uSpin) * (gL - uSpin) + q;
+  // |dn/ds|^2 = alpha^2 + beta^2 + a^2 (mu^2 - mu0^2), kept exact after every step.
+  float speedBase = alpha * alpha + beta * beta - uSpin * uSpin * cosObs * cosObs;
+
   float u = 0.0;
-  float v = 1.0 / impact;
-  float cosPhi = 1.0;
-  float sinPhi = 0.0;
-  float previousPlane = COS_INCL;
+  float vu = 1.0;
+  vec3 n = vec3(sinObs, 0.0, cosObs);
+  vec3 v = vec3(-beta * cosObs, alpha, beta * sinObs);
+  float extra = 0.0;
+  float nearCount = 0.0;
 
-  for (int iter = 0; iter < 420; iter += 1) {
-    bool farField = u < 0.035;
-    float h = farField ? STEP_FAR : STEP_NEAR;
-    float k1u = v;
-    float k1v = -u + 3.0 * u * u;
-    float u2 = u + 0.5 * h * k1u;
-    float v2 = v + 0.5 * h * k1v;
-    float k2u = v2;
-    float k2v = -u2 + 3.0 * u2 * u2;
-    float u3 = u + 0.5 * h * k2u;
-    float v3 = v + 0.5 * h * k2v;
-    float k3u = v3;
-    float k3v = -u3 + 3.0 * u3 * u3;
-    float u4 = u + h * k3u;
-    float v4 = v + h * k3v;
-    float k4u = v4;
-    float k4v = -u4 + 3.0 * u4 * u4;
-    float nextU = u + h / 6.0 * (k1u + 2.0 * k2u + 2.0 * k3u + k4u);
-    float nextV = v + h / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
-    float cosDelta = farField ? CD_F : CD_N;
-    float sinDelta = farField ? SD_F : SD_N;
-    float nextCosPhi = cosPhi * cosDelta - sinPhi * sinDelta;
-    float nextSinPhi = sinPhi * cosDelta + cosPhi * sinDelta;
-    float nextPlane = nextCosPhi * COS_INCL + nextSinPhi * e2z;
+  for (int iter = 0; iter < MAX_STEPS; iter += 1) {
+    float rate = max(sqrt(dot(v, v)), abs(dExtra(u)));
+    float h = min(STEP_MAX, PHI_PER_STEP / max(rate, 1e-3));
 
-    if (previousPlane * nextPlane < 0.0) {
-      float fraction = previousPlane / (previousPlane - nextPlane);
+    float u1 = vu;
+    float w1 = 0.5 * dU(u);
+    vec3 a1 = angularAccel(n, v);
+    float e1 = dExtra(u);
+
+    float uB = u + 0.5 * h * u1;
+    float vuB = vu + 0.5 * h * w1;
+    vec3 nB = n + 0.5 * h * v;
+    vec3 vB = v + 0.5 * h * a1;
+    float u2 = vuB;
+    float w2 = 0.5 * dU(uB);
+    vec3 a2 = angularAccel(nB, vB);
+    float e2 = dExtra(uB);
+
+    float uC = u + 0.5 * h * u2;
+    float vuC = vu + 0.5 * h * w2;
+    vec3 nC = n + 0.5 * h * vB;
+    vec3 vC = v + 0.5 * h * a2;
+    float u3 = vuC;
+    float w3 = 0.5 * dU(uC);
+    vec3 a3 = angularAccel(nC, vC);
+    float e3 = dExtra(uC);
+
+    float uD = u + h * u3;
+    float vuD = vu + h * w3;
+    vec3 nD = n + h * vC;
+    vec3 vD = v + h * a3;
+    float u4 = vuD;
+    float w4 = 0.5 * dU(uD);
+    vec3 a4 = angularAccel(nD, vD);
+    float e4 = dExtra(uD);
+
+    float nextU = u + h / 6.0 * (u1 + 2.0 * u2 + 2.0 * u3 + u4);
+    float nextVu = vu + h / 6.0 * (w1 + 2.0 * w2 + 2.0 * w3 + w4);
+    vec3 nextN = normalize(n + h / 6.0 * (v + 2.0 * vB + 2.0 * vC + vD));
+    vec3 nextV = v + h / 6.0 * (a1 + 2.0 * a2 + 2.0 * a3 + a4);
+    nextV -= nextN * dot(nextN, nextV);
+    float speed2 = speedBase + uSpin * uSpin * nextN.z * nextN.z;
+    nextV = normalize(nextV) * sqrt(max(speed2, 1e-6));
+    float nextExtra = extra + h / 6.0 * (e1 + 2.0 * e2 + 2.0 * e3 + e4);
+
+    if (n.z * nextN.z < 0.0) {
+      float fraction = n.z / (n.z - nextN.z);
       float crossingU = u + fraction * (nextU - u);
       if (crossingU > 0.0) {
         float radius = 1.0 / crossingU;
         if (radius > uRIn - 0.2 && radius < uROut) {
-          float crossingCos = cosPhi + fraction * (nextCosPhi - cosPhi);
-          float crossingSin = sinPhi + fraction * (nextSinPhi - sinPhi);
-          float px = radius * (crossingCos * SIN_INCL + crossingSin * e2x);
-          float py = radius * crossingSin * e2y;
-          record(radius, atan(py, px));
+          vec3 crossing = mix(n, nextN, fraction);
+          record(radius, atan(crossing.y, crossing.x) + mix(extra, nextExtra, fraction));
           if (gCount >= ${MAX_CROSSINGS}) return;
         }
       }
     }
 
-    if (nextU >= 0.5 || nextU <= 0.0) return;
+    if (nextU >= uCapture) return;
+    if (nextU <= 0.0) {
+      gData[15] = nearCount;
+      return;
+    }
+    if (nextU > 0.25) nearCount += 1.0;
     u = nextU;
+    vu = nextVu;
+    n = nextN;
     v = nextV;
-    cosPhi = nextCosPhi;
-    sinPhi = nextSinPhi;
-    previousPlane = nextPlane;
+    extra = nextExtra;
   }
 }
 
+
 void main() {
   for (int i = 0; i < 16; i += 1) gData[i] = 0.0;
-  SIN_INCL = sin(uIncl);
-  COS_INCL = cos(uIncl);
-  traceRay(rayCoord(pixelCoord(), uUnit));
+  traceRay(rayCoord(pixelCoord(), uUnit), cos(uIncl), sin(uIncl));
   o0 = vec4(gData[0], gData[1], gData[2], gData[3]);
   o1 = vec4(gData[4], gData[5], gData[6], gData[7]);
   o2 = vec4(gData[8], gData[9], gData[10], gData[11]);
   o3 = vec4(gData[12], gData[13], gData[14], gData[15]);
 }
 `
+
 
 const SHADE_SOURCE = `${SHADER_HEAD}
 const float STOP_T[6] = float[6](${STOPS.map(stop => f(stop[0])).join(', ')});
@@ -513,11 +606,10 @@ void main() {
   }
 
   vec2 pix = pixelCoord();
-  vec2 ray = rayCoord(pix, uUnit);
-  float screenAngle = atan(-(pix.y - CY), pix.x - CX);
-  float ringDistance = (length(ray) - 5.22) / 0.055;
-  float lobe = 0.5 + 0.5 * cos(screenAngle - 2.6);
-  float added = 0.8 * exp(-ringDistance * ringDistance) * (0.08 + 0.92 * lobe * lobe);
+  // Photon ring: rays that escape after winding around the hole near the photon
+  // orbit, measured by how many steps they spent close in (g[15]). Their shape
+  // follows the Kerr shadow rather than a fixed circle.
+  float added = 0.8 * smoothstep(60.0, 220.0, g[15]);
   float shadowDistance = length(pix - vec2(CX, CY));
   added += 0.012 + 0.05 * exp(-shadowDistance / (uShadowPx * 2.0))
     * (shadowDistance > uShadowPx ? 1.0 : 0.1);
@@ -536,32 +628,98 @@ uniform float uBloom;
 uniform float uShadowPx;
 out vec4 outColor;
 
-vec3 blurLod(vec2 uv, float lod) {
-  vec2 texel = exp2(lod) / vec2(W, H);
-  vec3 sum = vec3(0.0);
-  for (int x = -1; x <= 1; x += 1) {
-    for (int y = -1; y <= 1; y += 1) {
-      float weight = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
-      sum += weight * textureLod(uScene, uv + vec2(float(x), float(y)) * texel, lod).rgb;
-    }
-  }
-  return sum / 16.0;
+uniform sampler2D uBlurA;
+uniform sampler2D uBlurB;
+uniform sampler2D uBlurC;
+
+float luma(vec3 c) {
+  return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+vec3 sceneTap(vec2 uv) {
+  return textureLod(uScene, uv, 0.0).rgb;
+}
+
+// FXAA (Lottes, NVIDIA): every pixel is traced with one ray, so the lensed disk
+// and the shadow boundary are hard on/off steps. This blends along strong edges
+// only, leaving the disk texture untouched.
+vec3 sceneAA(vec2 uv) {
+  vec2 px = 1.0 / vec2(W, H);
+  vec3 rgbM = sceneTap(uv);
+  vec3 rgbNW = sceneTap(uv + vec2(-1.0, -1.0) * px);
+  vec3 rgbNE = sceneTap(uv + vec2(1.0, -1.0) * px);
+  vec3 rgbSW = sceneTap(uv + vec2(-1.0, 1.0) * px);
+  vec3 rgbSE = sceneTap(uv + vec2(1.0, 1.0) * px);
+  float lumaM = luma(rgbM);
+  float lumaNW = luma(rgbNW);
+  float lumaNE = luma(rgbNE);
+  float lumaSW = luma(rgbSW);
+  float lumaSE = luma(rgbSE);
+  float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+  float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+  if (lumaMax - lumaMin < max(0.03, lumaMax * 0.2)) return rgbM;
+
+  vec2 dir = vec2(-((lumaNW + lumaNE) - (lumaSW + lumaSE)), (lumaNW + lumaSW) - (lumaNE + lumaSE));
+  float dirReduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * 0.03125, 1.0 / 128.0);
+  dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + dirReduce), vec2(-3.0), vec2(3.0)) * px;
+  vec3 rgbA = 0.5 * (sceneTap(uv + dir * (1.0 / 3.0 - 0.5)) + sceneTap(uv + dir * (2.0 / 3.0 - 0.5)));
+  vec3 rgbB = 0.5 * rgbA + 0.25 * (sceneTap(uv - 0.5 * dir) + sceneTap(uv + 0.5 * dir));
+  float lumaB = luma(rgbB);
+  return (lumaB < lumaMin || lumaB > lumaMax) ? rgbA : rgbB;
 }
 
 void main() {
   vec2 uv = gl_FragCoord.xy / vec2(W, H);
-  vec3 color = textureLod(uScene, uv, 0.0).rgb;
+  vec3 color = sceneAA(uv);
   if (uBloom > 0.0) {
-    color += uBloom * 0.45 * blurLod(uv, ${f(BLOOM_LODS[0])});
-    color += uBloom * 0.55 * blurLod(uv, ${f(BLOOM_LODS[1])});
+    color += uBloom * 0.45 * texture(uBlurA, uv).rgb;
+    color += uBloom * 0.55 * texture(uBlurB, uv).rgb;
     float t = length(pixelCoord() - vec2(CX, CY + uShadowPx * 0.95)) / (uShadowPx * 1.5);
     float mask = t < 0.5 ? 1.0 - 0.8 * t : max(0.0, 0.6 - 1.2 * (t - 0.5));
-    color += uBloom * 4.0 * mask * blurLod(uv, ${f(BLOOM_LODS[2])});
+    color += uBloom * 4.0 * mask * texture(uBlurC, uv).rgb;
   }
   float n1 = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   float n2 = fract(sin(dot(gl_FragCoord.xy + vec2(19.19, 7.7), vec2(12.9898, 78.233))) * 43758.5453);
   color += (n1 + n2 - 1.0) / 255.0;
   outColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+}
+`
+
+const FILTER_HEAD = `#version 300 es
+precision highp float;
+uniform sampler2D uSource;
+uniform vec2 uSize;
+out vec4 outColor;
+`
+
+// Averages a 4x4 block per output pixel (four bilinear taps), halving or
+// quartering the resolution without aliasing.
+const DOWNSAMPLE_SOURCE = `${FILTER_HEAD}
+uniform vec2 uOffset;
+void main() {
+  vec2 uv = gl_FragCoord.xy / uSize;
+  outColor = 0.25 * (
+    texture(uSource, uv + vec2(-uOffset.x, -uOffset.y))
+    + texture(uSource, uv + vec2(uOffset.x, -uOffset.y))
+    + texture(uSource, uv + vec2(-uOffset.x, uOffset.y))
+    + texture(uSource, uv + vec2(uOffset.x, uOffset.y)));
+}
+`
+
+// One axis of a Gaussian; sigma is in texels of the (same-sized) source.
+const BLUR_SOURCE = `${FILTER_HEAD}
+uniform vec2 uStep;
+uniform float uSigma;
+void main() {
+  vec2 uv = gl_FragCoord.xy / uSize;
+  vec4 sum = vec4(0.0);
+  float total = 0.0;
+  for (int i = -${BLOOM_TAPS}; i <= ${BLOOM_TAPS}; i += 1) {
+    float weight = exp(-0.5 * float(i * i) / (uSigma * uSigma));
+    sum += weight * texture(uSource, uv + float(i) * uStep);
+    total += weight;
+  }
+  outColor = sum / total;
 }
 `
 
@@ -632,6 +790,7 @@ function resetControls() {
   contrast.value = DEFAULTS.contrast
   rIn.value = DEFAULTS.rIn
   rOut.value = DEFAULTS.rOut
+  spin.value = DEFAULTS.spin
   moveHole(CX, CY)
   rebuildDiskTexture()
 }
@@ -647,7 +806,7 @@ function viewAngles() {
   const normalY = Math.sin(pitchRad)
   const normalZ = Math.cos(pitchRad) * Math.cos(yawRad)
   return {
-    incl: Math.min(Math.acos(clamp(normalZ, -1, 1)), MAX_INCL),
+    incl: clamp(Math.acos(clamp(normalZ, -1, 1)), MIN_INCL, MAX_INCL),
     tilt: Math.atan2(-normalX, normalY) + roll.value * Math.PI / 180,
   }
 }
@@ -663,48 +822,52 @@ function centerHole() {
   moveHole(WIDTH / 2, HEIGHT / 2)
 }
 
-function hash(x, y) {
-  let value = x * 374761393 + y * 668265263
+function hash(x, y, z) {
+  let value = x * 374761393 + y * 668265263 + z * 2246822519
   value = (value ^ (value >>> 13)) * 1274126177
   return ((value ^ (value >>> 16)) >>> 0) / 4294967295
 }
 
-function valueNoise(x, y) {
+function valueNoise(x, y, z) {
   const xi = Math.floor(x)
   const yi = Math.floor(y)
+  const zi = Math.floor(z)
   const xf = x - xi
   const yf = y - yi
+  const zf = z - zi
   const u = xf * xf * (3 - 2 * xf)
   const v = yf * yf * (3 - 2 * yf)
-  const a = hash(xi, yi)
-  const b = hash(xi + 1, yi)
-  const c = hash(xi, yi + 1)
-  const d = hash(xi + 1, yi + 1)
-  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+  const w = zf * zf * (3 - 2 * zf)
+  const lerp = (a, b, t) => a + (b - a) * t
+  const plane = (dz) => lerp(
+    lerp(hash(xi, yi, zi + dz), hash(xi + 1, yi, zi + dz), u),
+    lerp(hash(xi, yi + 1, zi + dz), hash(xi + 1, yi + 1, zi + dz), u),
+    v,
+  )
+  return lerp(plane(0), plane(1), w)
 }
 
-function fbm(x, y) {
+function fbm(x, y, z) {
   let sum = 0
   let amplitude = 0.5
   for (let i = 0; i < 5; i += 1) {
-    sum += amplitude * valueNoise(x, y)
+    sum += amplitude * valueNoise(x, y, z)
     x = x * 2.03 + 11.7
     y = y * 2.03 + 3.1
+    z = z * 2.03 + 7.3
     amplitude *= 0.5
   }
   return sum
 }
 
+// The angle is sampled on a circle of radius `frequency` (same feature density as
+// angle * frequency), so the noise wraps at +/-PI with no seam.
 function periodicFbm(angle, frequency, radius) {
-  const weight = (angle + Math.PI) / TAU
-  return fbm(angle * frequency, radius) * (1 - weight)
-    + fbm((angle - TAU) * frequency, radius) * weight
+  return fbm(Math.cos(angle) * frequency, Math.sin(angle) * frequency, radius)
 }
 
 function periodicNoise(angle, frequency, radius) {
-  const weight = (angle + Math.PI) / TAU
-  return valueNoise(angle * frequency, radius) * (1 - weight)
-    + valueNoise((angle - TAU) * frequency, radius) * weight
+  return valueNoise(Math.cos(angle) * frequency, Math.sin(angle) * frequency, radius)
 }
 
 function clamp(value, low, high) {
@@ -754,11 +917,11 @@ function createProgram(fragmentSource) {
   return { program, uniforms }
 }
 
-function createTexture(internalFormat, format, type, data, filter, mipmaps = false) {
+function createTexture(internalFormat, format, type, data, filter, mipmaps = false, size = [WIDTH, HEIGHT]) {
   const texture = gl.createTexture()
   gl.bindTexture(gl.TEXTURE_2D, texture)
-  const width = data ? TEXTURE_ANGLES : WIDTH
-  const height = data ? TEXTURE_RADII : HEIGHT
+  const width = data ? TEXTURE_ANGLES : size[0]
+  const height = data ? TEXTURE_RADII : size[1]
   gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, data ?? null)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mipmaps ? gl.LINEAR_MIPMAP_LINEAR : filter)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter)
@@ -813,6 +976,8 @@ function initGpu() {
   traceProgram = createProgram(TRACE_SOURCE)
   shadeProgram = createProgram(SHADE_SOURCE)
   compositeProgram = createProgram(COMPOSITE_SOURCE)
+  downsampleProgram = createProgram(DOWNSAMPLE_SOURCE)
+  blurProgram = createProgram(BLUR_SOURCE)
 
   diskTexture = createDiskTexture()
 
@@ -828,12 +993,27 @@ function initGpu() {
   gl.drawBuffers(attachments)
   checkFramebuffer('Trace')
 
-  sceneTexture = createTexture(gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, null, gl.LINEAR, true)
+  sceneTexture = createTexture(gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, null, gl.LINEAR)
   sceneFramebuffer = gl.createFramebuffer()
   gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFramebuffer)
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTexture, 0)
   checkFramebuffer('Scene')
+
+  for (const level of new Set(BLOOM_LEVELS)) {
+    const size = [Math.ceil(WIDTH / 2 ** level), Math.ceil(HEIGHT / 2 ** level)]
+    bloomLevels[level] = { down: createTarget(size), scratch: createTarget(size) }
+  }
+  bloomTargets = BLOOM_LEVELS.map(level => createTarget([bloomLevels[level].down.width, bloomLevels[level].down.height]))
   gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+}
+
+function createTarget(size) {
+  const texture = createTexture(gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, null, gl.LINEAR, false, size)
+  const framebuffer = gl.createFramebuffer()
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer)
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0)
+  checkFramebuffer('Bloom')
+  return { texture, framebuffer, width: size[0], height: size[1] }
 }
 
 function bindTexture(slot, texture) {
@@ -841,9 +1021,9 @@ function bindTexture(slot, texture) {
   gl.bindTexture(gl.TEXTURE_2D, texture)
 }
 
-function drawPass(framebuffer) {
+function drawPass(framebuffer, width = WIDTH, height = HEIGHT) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-  gl.viewport(0, 0, WIDTH, HEIGHT)
+  gl.viewport(0, 0, width, height)
   gl.drawArrays(gl.TRIANGLES, 0, 3)
 }
 
@@ -854,8 +1034,11 @@ function traceRays() {
   gl.uniform1f(traceProgram.uniforms.uTilt, view.tilt)
   gl.uniform1f(traceProgram.uniforms.uIncl, view.incl)
   gl.uniform1f(traceProgram.uniforms.uUnit, unit)
-  gl.uniform1f(traceProgram.uniforms.uRIn, rIn.value)
+  gl.uniform1f(traceProgram.uniforms.uRIn, innerRadius.value)
   gl.uniform1f(traceProgram.uniforms.uROut, rOut.value)
+  gl.uniform1f(traceProgram.uniforms.uSpin, spin.value)
+  const horizon = 1 + Math.sqrt(1 - spin.value * spin.value)
+  gl.uniform1f(traceProgram.uniforms.uCapture, 1 / (horizon + HORIZON_MARGIN))
   drawPass(traceFramebuffer)
 }
 
@@ -881,8 +1064,41 @@ function shadeScene() {
   gl.uniform1f(uniforms.uTemperature, temperature.value)
   gl.uniform1f(uniforms.uBrightness, brightness.value)
   drawPass(sceneFramebuffer)
-  bindTexture(0, sceneTexture)
-  gl.generateMipmap(gl.TEXTURE_2D)
+}
+
+function downsample(sourceTexture, source, target, offset) {
+  const { program, uniforms } = downsampleProgram
+  gl.useProgram(program)
+  bindTexture(0, sourceTexture)
+  gl.uniform1i(uniforms.uSource, 0)
+  gl.uniform2f(uniforms.uSize, target.width, target.height)
+  gl.uniform2f(uniforms.uOffset, offset / source.width, offset / source.height)
+  drawPass(target.framebuffer, target.width, target.height)
+}
+
+function blurAxis(source, target, vertical, sigma) {
+  const { program, uniforms } = blurProgram
+  gl.useProgram(program)
+  bindTexture(0, source.texture)
+  gl.uniform1i(uniforms.uSource, 0)
+  gl.uniform2f(uniforms.uSize, target.width, target.height)
+  gl.uniform2f(uniforms.uStep, vertical ? 0 : 1 / target.width, vertical ? 1 / target.height : 0)
+  gl.uniform1f(uniforms.uSigma, sigma)
+  drawPass(target.framebuffer, target.width, target.height)
+}
+
+function renderBloom() {
+  const full = { width: WIDTH, height: HEIGHT }
+  const quarter = bloomLevels[2].down
+  const eighth = bloomLevels[3].down
+  downsample(sceneTexture, full, quarter, 1)
+  downsample(quarter.texture, quarter, eighth, 0.5)
+  BLOOM_RADII.forEach((radius, index) => {
+    const level = bloomLevels[BLOOM_LEVELS[index]]
+    const sigma = radius * BLOOM_SIGMA_SCALE / 2 ** BLOOM_LEVELS[index]
+    blurAxis(level.down, level.scratch, false, sigma)
+    blurAxis(level.scratch, bloomTargets[index], true, sigma)
+  })
 }
 
 function compositeScene() {
@@ -890,6 +1106,10 @@ function compositeScene() {
   gl.useProgram(program)
   bindTexture(0, sceneTexture)
   gl.uniform1i(uniforms.uScene, 0)
+  ;['uBlurA', 'uBlurB', 'uBlurC'].forEach((name, index) => {
+    bindTexture(index + 1, bloomTargets[index].texture)
+    gl.uniform1i(uniforms[name], index + 1)
+  })
   gl.uniform2f(uniforms.uCenter, centerX, centerY)
   gl.uniform1f(uniforms.uBloom, bloom.value)
   gl.uniform1f(uniforms.uShadowPx, shadowPx)
@@ -902,6 +1122,7 @@ function drawFrame() {
     needsTrace = false
   }
   shadeScene()
+  if (bloom.value > 0) renderBloom()
   compositeScene()
 }
 
