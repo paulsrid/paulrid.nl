@@ -87,9 +87,6 @@
         <output>{{ rOut }}</output>
       </label>
       <div class="button-row">
-        <button type="button" class="reset-button" :disabled="controlsDisabled" @click="centerHole">
-          Center
-        </button>
         <button type="button" class="reset-button" :disabled="controlsDisabled" @click="resetControls">
           Reset
         </button>
@@ -156,8 +153,8 @@ const MAX_SPIN = 0.998
 // where Boyer-Lindquist coordinates become singular.
 const HORIZON_MARGIN = 0.02
 const BASE_SHADOW_PX = 122 / 736 * WIDTH
-const CX = 580 / 736 * WIDTH
-const CY = 110 / 414 * HEIGHT
+const CX = WIDTH / 2
+const CY = HEIGHT / 2
 const ROLL_SNAP = 2
 const MAX_INCL = 89 * Math.PI / 180
 const SPIN_RATE = 0.5
@@ -818,10 +815,6 @@ function moveHole(x, y) {
   dirty = true
 }
 
-function centerHole() {
-  moveHole(WIDTH / 2, HEIGHT / 2)
-}
-
 function hash(x, y, z) {
   let value = x * 374761393 + y * 668265263 + z * 2246822519
   value = (value ^ (value >>> 13)) * 1274126177
@@ -1175,12 +1168,6 @@ body,
   width: 100vw;
   height: 100vh;
   object-fit: cover;
-}
-
-@media (max-aspect-ratio: 1/1) {
-  .black-hole-canvas {
-    object-position: 90% center;
-  }
 }
 
 .control-panel {
