@@ -54,12 +54,12 @@
       <label class="radius-control">
         Pitch
         <input v-model.number="pitch" type="range" min="0" max="89" step="1" :disabled="controlsDisabled">
-        <output>{{ pitch }}°</output>
+        <output>{{ Math.round(pitch) }}°</output>
       </label>
       <label class="radius-control">
         Yaw
         <input v-model.number="yaw" type="range" min="-90" max="90" step="1" :disabled="controlsDisabled">
-        <output>{{ yaw }}°</output>
+        <output>{{ Math.round(yaw) }}°</output>
       </label>
       <label class="radius-control">
         Detail
@@ -84,7 +84,7 @@
       <label class="radius-control">
         R out
         <input v-model.number="rOut" type="range" min="18" max="88" step="1" :disabled="controlsDisabled">
-        <output>{{ rOut }}</output>
+        <output>{{ Math.round(rOut) }}</output>
       </label>
       <div class="button-row">
         <button type="button" class="reset-button" :disabled="controlsDisabled" @click="resetControls">
@@ -96,10 +96,17 @@
     <canvas
       ref="canvas"
       class="black-hole-canvas"
+      :class="{ dragging }"
+      @pointerdown="startDrag"
+      @pointermove="dragMove"
+      @pointerup="endDrag"
+      @pointercancel="endDrag"
+      @wheel.prevent="wheelMass"
       :width="WIDTH"
       :height="HEIGHT"
       aria-label="Spinning ray-traced black hole and accretion disk"
     />
+    <div v-if="fps !== null" class="fps-counter" aria-label="Frames per second">{{ fps }} FPS</div>
     <aside class="info-box" :class="{ open: infoOpen }" aria-label="About this render">
       <button
         type="button"
@@ -221,6 +228,12 @@ const infoOpen = ref(false)
 const busy = ref(true)
 const controlsDisabled = ref(true)
 const status = ref('Computing…')
+// Rendered frames per second, sampled over FPS_INTERVAL ms. Counts frames actually
+// drawn, so it reads 0 while the scene is idle.
+const FPS_INTERVAL = 500
+const fps = ref(null)
+let fpsFrames = 0
+let fpsStart = 0
 
 let gl
 let vao
@@ -276,7 +289,7 @@ watch(mass, () => {
 })
 
 watch(roll, (value) => {
-  if (value !== 0 && Math.abs(value) <= ROLL_SNAP) roll.value = 0
+  if (!resetting && value !== 0 && Math.abs(value) <= ROLL_SNAP) roll.value = 0
 })
 
 // Prograde innermost stable circular orbit of a Kerr hole (Bardeen, Press & Teukolsky 1972).
@@ -761,6 +774,7 @@ onMounted(() => {
     controlsDisabled.value = false
     frame = window.requestAnimationFrame((time) => {
       lastFrameTime = time
+      fpsStart = time
       tick(time)
     })
   }, 30)
@@ -768,28 +782,96 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   mounted = false
+  cancelReset()
   window.clearTimeout(timer)
   window.cancelAnimationFrame(frame)
   gl?.getExtension('WEBGL_lose_context')?.loseContext()
 })
 
+// Dragging with the left button rotates the view: horizontal drag changes yaw,
+// vertical drag changes pitch (the same values as the sliders).
+const DRAG_DEGREES_PER_PX = 0.3
+const dragging = ref(false)
+let dragX = 0
+let dragY = 0
+let dragYaw = 0
+let dragPitch = 0
+
+function startDrag(event) {
+  if (event.button !== 0 || controlsDisabled.value) return
+  cancelReset()
+  dragging.value = true
+  dragX = event.clientX
+  dragY = event.clientY
+  dragYaw = yaw.value
+  dragPitch = pitch.value
+  event.currentTarget.setPointerCapture(event.pointerId)
+}
+
+function dragMove(event) {
+  if (!dragging.value) return
+  yaw.value = Math.round(clamp(dragYaw + (event.clientX - dragX) * DRAG_DEGREES_PER_PX, -90, 90))
+  pitch.value = Math.round(clamp(dragPitch - (event.clientY - dragY) * DRAG_DEGREES_PER_PX, 0, 89))
+}
+
+function endDrag(event) {
+  if (!dragging.value) return
+  dragging.value = false
+  event.currentTarget.releasePointerCapture?.(event.pointerId)
+}
+
+// The scroll wheel changes the mass (same range as the slider): up grows it, down shrinks it.
+const WHEEL_MASS_PER_PX = 0.0005
+function wheelMass(event) {
+  if (controlsDisabled.value) return
+  cancelReset()
+  // deltaMode 1 is lines, not pixels
+  const delta = event.deltaY * (event.deltaMode === 1 ? 33 : 1)
+  mass.value = Math.round(clamp(mass.value - delta * WHEEL_MASS_PER_PX, 0.35, 1.5) * 100) / 100
+}
+
+// Reset eases every value back to its default. Detail and contrast rebuild the
+// disk texture, so they jump at the end instead of animating.
+const RESET_MS = 800
+const RESET_KEYS = {
+  bloom, speed, mass, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin,
+}
+let resetFrame = 0
+let resetting = false
+
+function cancelReset() {
+  window.cancelAnimationFrame(resetFrame)
+  resetting = false
+}
+
 function resetControls() {
-  bloom.value = DEFAULTS.bloom
+  cancelReset()
   spinEnabled.value = DEFAULTS.spinEnabled
-  speed.value = DEFAULTS.speed
-  mass.value = DEFAULTS.mass
-  temperature.value = DEFAULTS.temperature
-  brightness.value = DEFAULTS.brightness
-  roll.value = DEFAULTS.roll
-  pitch.value = DEFAULTS.pitch
-  yaw.value = DEFAULTS.yaw
-  detail.value = DEFAULTS.detail
-  contrast.value = DEFAULTS.contrast
-  rIn.value = DEFAULTS.rIn
-  rOut.value = DEFAULTS.rOut
-  spin.value = DEFAULTS.spin
-  moveHole(CX, CY)
-  rebuildDiskTexture()
+  const from = Object.fromEntries(Object.entries(RESET_KEYS).map(([key, control]) => [key, control.value]))
+  const fromX = centerX
+  const fromY = centerY
+  let start = null
+  resetting = true
+
+  const step = (now) => {
+    if (!resetting || !mounted) return
+    start ??= now
+    const t = Math.min(1, (now - start) / RESET_MS)
+    const eased = 1 - (1 - t) ** 3
+    for (const [key, control] of Object.entries(RESET_KEYS)) {
+      control.value = from[key] + (DEFAULTS[key] - from[key]) * eased
+    }
+    moveHole(fromX + (CX - fromX) * eased, fromY + (CY - fromY) * eased)
+    if (t < 1) {
+      resetFrame = window.requestAnimationFrame(step)
+      return
+    }
+    resetting = false
+    detail.value = DEFAULTS.detail
+    contrast.value = DEFAULTS.contrast
+    rebuildDiskTexture()
+  }
+  resetFrame = window.requestAnimationFrame(step)
 }
 
 // The lensing is spherically symmetric, so only the disk normal relative to
@@ -1128,6 +1210,12 @@ function tick(now) {
   if (spinning || dirty) {
     drawFrame()
     dirty = false
+    fpsFrames += 1
+  }
+  if (now - fpsStart >= FPS_INTERVAL) {
+    fps.value = Math.round(fpsFrames * 1000 / (now - fpsStart))
+    fpsFrames = 0
+    fpsStart = now
   }
   frame = window.requestAnimationFrame(tick)
 }
@@ -1168,6 +1256,12 @@ body,
   width: 100vw;
   height: 100vh;
   object-fit: cover;
+  cursor: grab;
+  touch-action: none;
+}
+
+.black-hole-canvas.dragging {
+  cursor: grabbing;
 }
 
 .control-panel {
@@ -1235,6 +1329,21 @@ body,
 .control-panel .reset-button:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+.fps-counter {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #e8d6c0;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
 }
 
 .info-box {
