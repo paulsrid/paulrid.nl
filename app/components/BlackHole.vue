@@ -9,6 +9,7 @@
     >
       Controls
     </button>
+    <Transition name="panel">
     <section v-show="!panelHidden" class="control-panel" :class="{ busy }" :style="panelColors" aria-label="Black hole controls">
       <button
         type="button"
@@ -19,80 +20,115 @@
       >
         x
       </button>
-      <label>
-        <input v-model="spinEnabled" type="checkbox" :disabled="controlsDisabled">
-        Spin accretion disk
-      </label>
-      <label class="mass-control">
-        Mass
-        <input v-model.number="mass" type="range" min="0.35" max="1.5" step="0.05" :disabled="controlsDisabled">
-        <output>{{ Math.round(mass * 100) }}%</output>
-      </label>
-      <label class="radius-control">
-        Bloom
-        <input v-model.number="bloom" type="range" min="0" max="2" step="0.05" :disabled="controlsDisabled">
-        <output>{{ bloom.toFixed(2) }}</output>
-      </label>
-      <label class="speed-control">
-        Speed
-        <input v-model.number="speed" type="range" min="0" max="5" step="0.1" :disabled="controlsDisabled">
-      </label>
-      <label class="temperature-control">
-        Temperature
-        <input v-model.number="temperature" type="range" min="0" max="1" step="0.01" :disabled="controlsDisabled">
-      </label>
-      <label class="radius-control">
-        Brightness
-        <input v-model.number="brightness" type="range" min="0" max="3" step="0.1" :disabled="controlsDisabled">
-        <output>{{ brightness.toFixed(1) }}</output>
-      </label>
-      <label class="radius-control">
-        Roll
-        <input v-model.number="roll" type="range" min="-180" max="180" step="0.5" :disabled="controlsDisabled">
-        <output>{{ roll.toFixed(1) }}°</output>
-      </label>
-      <label class="radius-control">
-        Pitch
-        <input v-model.number="pitch" type="range" min="0" max="89" step="1" :disabled="controlsDisabled">
-        <output>{{ Math.round(pitch) }}°</output>
-      </label>
-      <label class="radius-control">
-        Yaw
-        <input v-model.number="yaw" type="range" min="-90" max="90" step="1" :disabled="controlsDisabled">
-        <output>{{ Math.round(yaw) }}°</output>
-      </label>
-      <label class="radius-control">
-        Detail
-        <input v-model.number="detail" type="range" min="1" max="12" step="0.5" :disabled="controlsDisabled" @change="rebuildDiskTexture">
-        <output>{{ detail.toFixed(1) }}</output>
-      </label>
-      <label class="radius-control">
-        Contrast
-        <input v-model.number="contrast" type="range" min="0.5" max="3" step="0.1" :disabled="controlsDisabled" @change="rebuildDiskTexture">
-        <output>{{ contrast.toFixed(1) }}</output>
-      </label>
-      <label class="radius-control">
-        Spin a/M
-        <input v-model.number="spin" type="range" min="0" :max="MAX_SPIN" step="0.002" :disabled="controlsDisabled">
-        <output>{{ spin.toFixed(3) }}</output>
-      </label>
-      <label class="radius-control">
-        R in
-        <input v-model.number="rIn" type="range" :min="R_IN_MIN" max="6" step="0.1" :disabled="controlsDisabled">
-        <output>{{ innerRadius.toFixed(1) }}</output>
-      </label>
-      <label class="radius-control">
-        R out
-        <input v-model.number="rOut" type="range" min="18" max="88" step="1" :disabled="controlsDisabled">
-        <output>{{ Math.round(rOut) }}</output>
-      </label>
-      <div class="button-row">
-        <button type="button" class="reset-button" :disabled="controlsDisabled" @click="resetControls">
-          Reset
-        </button>
+      <div class="control-groups">
+        <fieldset class="control-group">
+          <legend>Black hole</legend>
+          <label class="radius-control" title="Mass of the black hole in solar masses (logarithmic, 1 to 66 billion). The default is about Sagittarius A*. The picture looks the same at any mass, because the physics scales with it; mass sets the real size, shown as the horizon radius.">
+            Mass (M☉)
+            <input v-model.number="massLog" type="range" :min="MASS_LOG_MIN" :max="MASS_LOG_MAX" step="0.02" :disabled="controlsDisabled">
+            <output>{{ formatMass(solarMass) }}</output>
+          </label>
+          <label class="radius-control" title="Spin of the black hole, a/M, from 0 (not rotating) to 0.998 (nearly the maximum). More spin drags space around, shrinks the horizon, moves the disk's inner edge closer and flattens the shadow.">
+            Spin a/M
+            <input v-model.number="spin" type="range" min="0" :max="MAX_SPIN" step="0.002" :disabled="controlsDisabled">
+            <output>{{ spin.toFixed(3) }}</output>
+          </label>
+          <span class="mass-readout" title="Size of the event horizon (the point of no return) for the chosen mass and spin. It shrinks as the spin grows.">Horizon radius {{ formatLength(horizonKm) }}</span>
+        </fieldset>
+        <fieldset class="control-group">
+          <legend>View</legend>
+          <label class="radius-control" title="Camera distance: how large the hole appears on screen. It does not change the physics. The scroll wheel does the same.">
+            Zoom
+            <input v-model.number="zoom" type="range" min="0.1" max="1.5" step="0.05" :disabled="controlsDisabled">
+            <output>{{ Math.round(zoom * 100) }}%</output>
+          </label>
+          <label class="radius-control" title="Tilt of the disk towards the viewer. 0° sees it edge-on, 89° almost face-on. Dragging up or down changes it.">
+            Pitch
+            <input v-model.number="pitch" type="range" min="0" max="89" step="1" :disabled="controlsDisabled">
+            <output>{{ Math.round(pitch) }}°</output>
+          </label>
+          <label class="radius-control" title="Swing the disk's tilt to the left or right. Dragging sideways changes it.">
+            Yaw
+            <input v-model.number="yaw" type="range" min="-90" max="90" step="1" :disabled="controlsDisabled">
+            <output>{{ Math.round(yaw) }}°</output>
+          </label>
+          <label class="radius-control" title="Rotate the view around the line of sight, like turning the camera. Snaps to 0 near zero.">
+            Roll
+            <input v-model.number="roll" type="range" min="-180" max="180" step="0.5" :disabled="controlsDisabled">
+            <output>{{ roll.toFixed(1) }}°</output>
+          </label>
+        </fieldset>
+        <fieldset class="control-group two-columns">
+          <legend>Accretion disk</legend>
+          <label class="radius-control" title="How fast the disk rotates. 0 freezes it, and the picture stops redrawing, which saves power.">
+            Speed
+            <input v-model.number="speed" type="range" min="0" max="5" step="0.1" :disabled="controlsDisabled">
+            <output>{{ speed.toFixed(1) }}</output>
+          </label>
+          <label class="radius-control" title="Temperature of the disk at its brightest ring, from about 3,500 K (orange) to 10,000 K (blue-white). Every other part is coloured from this using the disk model, Doppler shift and redshift.">
+            Temperature
+            <input v-model.number="temperature" type="range" min="0" max="1" step="0.01" :disabled="controlsDisabled">
+            <output>{{ Math.round(3500 + 6500 * temperature) }}K</output>
+          </label>
+          <label class="radius-control" title="Exposure of the accretion disk. It changes how bright the disk looks, not its temperature or colour.">
+            Brightness
+            <input v-model.number="brightness" type="range" min="0" max="3" step="0.1" :disabled="controlsDisabled">
+            <output>{{ brightness.toFixed(1) }}</output>
+          </label>
+          <label class="radius-control" title="Inner edge of the disk, in units of GM/c². It cannot go inside the innermost stable orbit, which depends on the spin, so this only moves the edge outwards; the value shown is the edge in use.">
+            R in
+            <input v-model.number="rIn" type="range" :min="R_IN_MIN" max="6" step="0.1" :disabled="controlsDisabled">
+            <output>{{ innerRadius.toFixed(1) }}</output>
+          </label>
+          <label class="radius-control" title="Outer edge of the disk, in units of GM/c². The disk fades out towards this radius.">
+            R out
+            <input v-model.number="rOut" type="range" min="18" max="88" step="1" :disabled="controlsDisabled">
+            <output>{{ Math.round(rOut) }}</output>
+          </label>
+          <label class="radius-control" title="Size of the clumps in the disk texture: higher gives finer, more numerous structure. Rebuilds the texture when released.">
+            Detail
+            <input v-model.number="detail" type="range" min="1" max="12" step="0.5" :disabled="controlsDisabled" @change="rebuildDiskTexture">
+            <output>{{ detail.toFixed(1) }}</output>
+          </label>
+          <label class="radius-control" title="How strongly the clumps stand out from the smooth disk. Rebuilds the texture when released.">
+            Contrast
+            <input v-model.number="contrast" type="range" min="0.5" max="3" step="0.1" :disabled="controlsDisabled" @change="rebuildDiskTexture">
+            <output>{{ contrast.toFixed(1) }}</output>
+          </label>
+        </fieldset>
+        <fieldset class="control-group">
+          <legend>Display</legend>
+          <label class="radius-control" title="Strength of the glow around bright areas. Purely cosmetic; 0 turns it off.">
+            Bloom
+            <input v-model.number="bloom" type="range" min="0" max="2" step="0.05" :disabled="controlsDisabled">
+            <output>{{ bloom.toFixed(2) }}</output>
+          </label>
+          <label title="Draw a thin ring at the true size of the event horizon. The black disc you see is larger: it is the shadow, where light bent by gravity is lost.">
+            <input v-model="showHorizon" type="checkbox" :disabled="controlsDisabled">
+            Show event horizon
+          </label>
+          <label title="Draw a yellow ring with the Sun's true radius (695,700 km) at the same scale. Raise the mass and the Sun shrinks relative to the hole. For a hole of a few solar masses the Sun is larger than the screen.">
+            <input v-model="showSun" type="checkbox" :disabled="controlsDisabled">
+            Show Sun for scale
+          </label>
+          <label title="Draw a violet ring with the Earth's true radius (6,371 km) at the same scale. It is off-screen for small holes and shrinks to a dot above a few hundred thousand solar masses; it is easiest to see between a few hundred and a few hundred thousand.">
+            <input v-model="showEarth" type="checkbox" :disabled="controlsDisabled">
+            Show Earth for scale
+          </label>
+          <label title="Draw a green ring the size of the Solar System out to Neptune's orbit (30 AU, 4.5 billion km radius) at the same scale. It only fits on screen for very massive holes, roughly a billion solar masses or more.">
+            <input v-model="showSolarSystem" type="checkbox" :disabled="controlsDisabled">
+            Show Solar System (Neptune)
+          </label>
+          <div class="button-row">
+            <button type="button" class="reset-button" title="Smoothly return every setting to its default." :disabled="controlsDisabled" @click="resetControls">
+              Reset
+            </button>
+            <span v-if="status" role="status">{{ status }}</span>
+          </div>
+        </fieldset>
       </div>
-      <span v-if="status" role="status">{{ status }}</span>
     </section>
+    </Transition>
     <canvas
       ref="canvas"
       class="black-hole-canvas"
@@ -101,11 +137,20 @@
       @pointermove="dragMove"
       @pointerup="endDrag"
       @pointercancel="endDrag"
-      @wheel.prevent="wheelMass"
+      @wheel.prevent="wheelZoom"
       :width="WIDTH"
       :height="HEIGHT"
+      title="Drag to rotate the view, scroll to zoom"
       aria-label="Spinning ray-traced black hole and accretion disk"
     />
+    <div
+      v-for="label in ringLabels"
+      :key="label.key"
+      class="ring-label"
+      :style="{ left: `${label.left}px`, top: `${label.top}px`, color: label.color }"
+    >
+      {{ label.text }}
+    </div>
     <div v-if="fps !== null" class="fps-counter" aria-label="Frames per second">{{ fps }} FPS</div>
     <aside class="info-box" :class="{ open: infoOpen }" aria-label="About this render">
       <button
@@ -118,6 +163,7 @@
       >
         {{ infoOpen ? '×' : '!' }}
       </button>
+      <Transition name="panel">
       <div v-show="infoOpen" class="info-content">
       <h2>How this is made</h2>
       <p>
@@ -133,16 +179,48 @@
         over the top and under the hole (the far side of the disk, bent into view).
       </p>
       <p>
-        The disk is a procedural noise texture, sheared so the inside orbits faster than the
-        outside, and it ends at the innermost stable orbit, which moves inward as the spin
-        grows. Doppler shift and gravitational redshift (computed for Kerr circular orbits) make
-        the approaching side brighter and the colours shift. A final bloom pass adds the glow.
+        The disk is a thin accretion disk that ends at the innermost stable orbit, which moves
+        inward as the spin grows. Its brightness follows the Novikov-Thorne model: zero at the
+        inner edge, peaking a little outside it, then fading with radius. The local temperature
+        follows from that flux, and each pixel is coloured as a blackbody at the temperature
+        seen after Doppler shift and gravitational redshift (computed for Kerr circular
+        orbits), so the approaching side is hotter and brighter. A procedural noise texture,
+        sheared so the inside orbits faster than the outside, adds the clumpy structure, and a
+        final bloom pass adds the glow.
+      </p>
+      <p>
+        Mass and size: the physics is scale-free, so the picture looks the same for any mass
+        (1 to 66 billion solar masses, the estimated mass of TON 618). The Mass slider only sets
+        the real size. One gravitational radius, GM/c², is 1.48 km per solar mass. The event
+        horizon is two of those for a non-spinning hole and shrinks towards one at maximum spin.
+        The black disc you see is the shadow, about 2.6 times the horizon for a non-spinning
+        hole, because gravity bends light into the hole from beyond it.
+      </p>
+      <p>
+        Scale rings, all drawn at the same scale as the hole: blue is the event horizon, violet
+        the Earth (6,371 km radius), yellow the Sun (695,700 km) and green the orbit of Neptune
+        (30 AU). Each is labelled and hidden when it is off-screen. The Earth and Sun are easiest
+        to see for holes of a few hundred to a few hundred thousand solar masses, and the
+        Neptune ring only fits for roughly a billion solar masses or more.
+      </p>
+      <p>
+        Controls: drag to rotate the view and scroll to zoom. The panel groups the controls into
+        the black hole (mass, spin), the view (zoom, pitch, yaw, roll), the accretion disk (speed,
+        temperature, brightness, edges, texture) and the display (bloom and the scale rings).
+        Hover over any control for an explanation, and Reset eases everything back to the
+        defaults. The counter in the top right shows rendered frames per second.
+      </p>
+      <p>
+        The disk model follows the thin-disk theory reviewed in Abramowicz and Fragile,
+        "Foundations of Black Hole Accretion Disk Theory" (Living Reviews in Relativity, 2013);
+        thicker disk models are not included.
       </p>
       <p>
         Copyright 2026 Paul Rid<template v-if="contact">
           (<a :href="`mailto:${contact}`">{{ contact }}</a>)</template>.
       </p>
       </div>
+      </Transition>
     </aside>
   </main>
 </template>
@@ -183,6 +261,12 @@ const TEXTURE_RADII = 1024
 const TEX_MIN = R_IN_MIN - 0.2
 const TEX_STEP = (R_OUT_MAX - TEX_MIN) / (TEXTURE_RADII - 1)
 const MAX_CROSSINGS = 3
+// Disk colour: the temperature at the flux peak runs from PEAK_TEMP_WARM to
+// PEAK_TEMP_COOL with the Temperature slider; DISK_EXPOSURE sets overall brightness.
+const PEAK_TEMP_WARM = 3500
+const PEAK_TEMP_COOL = 10000
+const DISK_EXPOSURE = 1.6
+const FLUX_SAMPLES = 600
 // Bloom is three Gaussian blurs of the scene, each at a reduced resolution
 // (2^level times smaller) so wide blurs stay cheap. Radii are in pixels, tuned
 // at 1280 wide; sigma is about 0.8 of the radius.
@@ -194,9 +278,14 @@ const BLOOM_TAPS = 14
 const canvas = ref(null)
 const DEFAULTS = {
   bloom: 1,
-  spinEnabled: true,
   speed: 1,
-  mass: 1,
+  zoom: 1,
+  // log10 of the mass in solar masses; 6.63 is Sagittarius A* (about 4.3 million)
+  massLog: 6.63,
+  showHorizon: false,
+  showSun: false,
+  showEarth: false,
+  showSolarSystem: false,
   temperature: 0,
   brightness: 0.7,
   roll: 15.5,
@@ -210,9 +299,24 @@ const DEFAULTS = {
 }
 
 const bloom = ref(DEFAULTS.bloom)
-const spinEnabled = ref(DEFAULTS.spinEnabled)
 const speed = ref(DEFAULTS.speed)
-const mass = ref(DEFAULTS.mass)
+const zoom = ref(DEFAULTS.zoom)
+const massLog = ref(DEFAULTS.massLog)
+const showHorizon = ref(DEFAULTS.showHorizon)
+const showSun = ref(DEFAULTS.showSun)
+const showEarth = ref(DEFAULTS.showEarth)
+const showSolarSystem = ref(DEFAULTS.showSolarSystem)
+const EARTH_RADIUS_KM = 6371
+const SOLAR_RADIUS_KM = 695700
+const MASS_LOG_MIN = 0
+// TON 618, about 66 billion solar masses (log10 = 10.82)
+const MASS_LOG_MAX = 10.82
+// One gravitational radius GM/c^2 per solar mass, in km
+const KM_PER_SOLAR_MASS = 1.4766
+const KM_PER_AU = 1.496e8
+// Neptune's orbit (semi-major axis 30.07 AU), the outermost planet
+const NEPTUNE_ORBIT_KM = 30.07 * KM_PER_AU
+const solarMass = computed(() => 10 ** massLog.value)
 const temperature = ref(DEFAULTS.temperature)
 const brightness = ref(DEFAULTS.brightness)
 const roll = ref(DEFAULTS.roll)
@@ -277,12 +381,67 @@ const panelColors = computed(() => ({
   '--panel-ink': stopColor(STOPS[4].slice(1), BLUE_STOPS[4].slice(1)),
 }))
 
-watch([bloom, spinEnabled, speed, temperature, brightness], () => {
+watch([bloom, speed, temperature, brightness, showHorizon, showSun, showEarth, showSolarSystem, massLog], () => {
   dirty = true
 })
 
-watch(mass, () => {
-  shadowPx = BASE_SHADOW_PX * mass.value
+// The render is scale-free (G = c = M = 1), so mass does not change the picture;
+// it only sets the physical size. The horizon is at r+ = M (1 + sqrt(1 - a^2)).
+const horizonRadius = computed(() => 1 + Math.sqrt(1 - spin.value * spin.value))
+// The Sun's radius in units of M, so it shares the render's scale
+const sunRadius = computed(() => SOLAR_RADIUS_KM / (KM_PER_SOLAR_MASS * solarMass.value))
+const earthRadius = computed(() => EARTH_RADIUS_KM / (KM_PER_SOLAR_MASS * solarMass.value))
+const solarSystemRadius = computed(() => NEPTUNE_ORBIT_KM / (KM_PER_SOLAR_MASS * solarMass.value))
+const horizonKm = computed(() => horizonRadius.value * KM_PER_SOLAR_MASS * solarMass.value)
+
+// Labels for the scale rings are HTML over the canvas. The canvas is stretched
+// with object-fit: cover, so render pixels map to the window by a uniform scale
+// and a centring offset. Each label sits just right of its ring, stacked so
+// rings of equal size do not overprint each other's text.
+const viewport = ref({ width: 0, height: 0 })
+const LABEL_HEIGHT = 14
+const ringLabels = computed(() => {
+  const { width, height } = viewport.value
+  if (!width) return []
+  const scale = Math.max(width / WIDTH, height / HEIGHT)
+  const offsetX = (width - WIDTH * scale) / 2
+  const offsetY = (height - HEIGHT * scale) / 2
+  const pxPerM = BASE_SHADOW_PX * zoom.value / 5.196
+  const rings = [
+    [showHorizon.value, 'horizon', `Event horizon, ${formatLength(horizonKm.value)} radius`, horizonRadius.value, '#73d9ff'],
+    [showEarth.value, 'earth', 'Earth, 6,371 km radius', earthRadius.value, '#cc99ff'],
+    [showSun.value, 'sun', 'Sun, 695,700 km radius', sunRadius.value, '#ffd926'],
+    [showSolarSystem.value, 'neptune', 'Neptune’s orbit, 30 AU radius', solarSystemRadius.value, '#66ff80'],
+  ].filter(ring => ring[0])
+  return rings
+    .map(([, key, text, radiusM, color], index) => ({
+      key,
+      text,
+      color,
+      left: offsetX + (CX + radiusM * pxPerM) * scale + 6,
+      top: offsetY + CY * scale - LABEL_HEIGHT / 2 + (index - (rings.length - 1) / 2) * LABEL_HEIGHT,
+    }))
+    .filter(label => label.left > 0 && label.left < width - 40)
+})
+const updateViewport = () => {
+  viewport.value = { width: window.innerWidth, height: window.innerHeight }
+}
+
+function formatMass(value) {
+  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`
+  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`
+  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}k`
+  return value.toFixed(0)
+}
+
+function formatLength(km) {
+  if (km >= KM_PER_AU * 0.1) return `${(km / KM_PER_AU).toFixed(2)} AU`
+  if (km >= 1e6) return `${(km / 1e6).toFixed(1)} million km`
+  return `${km.toLocaleString('en-US', { maximumFractionDigits: 0 })} km`
+}
+
+watch(zoom, () => {
+  shadowPx = BASE_SHADOW_PX * zoom.value
   unit = shadowPx / 5.196
   needsTrace = true
   dirty = true
@@ -300,6 +459,34 @@ const iscoRadius = (a) => {
   return 3 + z2 - Math.sqrt((3 - z1) * (3 + z1 + 2 * z2))
 }
 const innerRadius = computed(() => Math.max(rIn.value, iscoRadius(spin.value)))
+
+// Novikov-Thorne flux (Page & Thorne 1974), mirrored from the trace shader so the
+// peak over the visible disk can be found and the shader flux scaled to 1 there.
+function fluxRoots(a) {
+  const phase = Math.acos(a) / 3
+  return [
+    Math.sqrt(iscoRadius(a)),
+    2 * Math.cos(phase - Math.PI / 3),
+    2 * Math.cos(phase + Math.PI / 3),
+    -2 * Math.cos(phase),
+  ]
+}
+
+function diskFlux(radius, a, [x0, x1, x2, x3]) {
+  const x = Math.max(Math.sqrt(radius), x0 * 1.0001)
+  const term = (xi, xj, xk) => 3 * (xi - a) ** 2 / (xi * (xi - xj) * (xi - xk)) * Math.log((x - xi) / (x0 - xi))
+  const bracket = x - x0 - 1.5 * a * Math.log(x / x0) - term(x1, x2, x3) - term(x2, x1, x3) - term(x3, x1, x2)
+  return Math.max(bracket, 0) / (x ** 4 * (x ** 3 - 3 * x + 2 * a))
+}
+
+function peakDiskFlux(a, roots) {
+  let peak = 0
+  const from = innerRadius.value
+  for (let i = 0; i <= FLUX_SAMPLES; i += 1) {
+    peak = Math.max(peak, diskFlux(from + (rOut.value - from) * i / FLUX_SAMPLES, a, roots))
+  }
+  return peak
+}
 
 watch([rIn, rOut, roll, pitch, yaw, spin], () => {
   needsTrace = true
@@ -357,6 +544,9 @@ uniform float uROut;
 uniform float uIncl;
 uniform float uSpin;
 uniform float uCapture;
+// Page & Thorne roots (sqrt(r_isco), x1, x2, x3) and 1 / peak flux, see novikovThorneFlux
+uniform vec4 uRoots;
+uniform float uFluxNorm;
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
 layout(location = 2) out vec4 o2;
@@ -370,16 +560,38 @@ float gL = 0.0;
 float gC = 0.0;
 float gK = 0.0;
 
+float rootTerm(float xi, float xj, float xk, float x, float a) {
+  return 3.0 * (xi - a) * (xi - a) / (xi * (xi - xj) * (xi - xk))
+    * log((x - xi) / (uRoots.x - xi));
+}
+
+// Flux radiated by a thin disk around a Kerr hole (Novikov & Thorne 1973, in the
+// closed form of Page & Thorne 1974, x = sqrt(r)). It vanishes at the innermost
+// stable orbit and falls as r^-3 far out; uFluxNorm scales the peak to 1.
+float novikovThorneFlux(float radius) {
+  float a = max(uSpin, 0.001);
+  float x0 = uRoots.x;
+  float x = max(sqrt(radius), x0 * 1.0001);
+  float bracket = x - x0 - 1.5 * a * log(x / x0)
+    - rootTerm(uRoots.y, uRoots.z, uRoots.w, x, a)
+    - rootTerm(uRoots.z, uRoots.y, uRoots.w, x, a)
+    - rootTerm(uRoots.w, uRoots.y, uRoots.z, x, a);
+  return max(bracket, 0.0) / (x * x * x * x * (x * x * x - 3.0 * x + 2.0 * a));
+}
+
 // Disk emission at a crossing of the equatorial plane. Matter on a prograde
 // circular Kerr orbit has angular velocity W = 1 / (r^1.5 + a) and time
 // dilation u^t, so a photon with angular momentum L reaches infinity with
 // g = 1 / (u^t (1 - W L)): one factor covering Doppler and gravitational shift.
+// Observed bolometric intensity is g^4 times the emitted flux, and the observed
+// temperature is g times the local one (T ~ flux^(1/4)), so the stored value
+// g^4 F also carries the colour.
 void record(float radius, float angle) {
   float edge = smoothstep(uRIn, uRIn + 0.7, radius)
     * (1.0 - smoothstep(uROut * 0.35, uROut, radius));
   if (edge <= 0.001) return;
 
-  float intensity = pow(uRIn / radius, 2.1);
+  float flux = novikovThorneFlux(radius) * uFluxNorm;
   float r15 = radius * sqrt(radius);
   float root = max(r15 - 3.0 * sqrt(radius) + 2.0 * uSpin, 0.05);
   float timeDilation = (r15 + uSpin) / (sqrt(r15) * sqrt(root));
@@ -392,7 +604,7 @@ void record(float radius, float angle) {
   gData[base] = clamp((radius - TEX_MIN) / TEX_STEP, 0.0, TEXTURE_RADII - 1.001);
   gData[base + 1] = textureAngle;
   gData[base + 2] = pow(uRIn / radius, SHEAR);
-  gData[base + 3] = intensity * pow(redshift, 2.6) * edge;
+  gData[base + 3] = flux * pow(redshift, 4.0) * edge;
   gData[base + 4] = edge;
   gCount += 1;
 }
@@ -540,7 +752,20 @@ uniform float uPhaseB;
 uniform float uMixA;
 uniform float uTemperature;
 uniform float uBrightness;
+uniform float uPeakTemp;
 out vec4 outColor;
+
+// Blackbody colour (Tanner Helland's fit to the Planckian locus, 1000-40000 K),
+// scaled so the brightest channel is 1.
+vec3 blackbody(float kelvin) {
+  float t = clamp(kelvin, 1000.0, 40000.0) / 100.0;
+  float r = t <= 66.0 ? 1.0 : 329.698727446 * pow(max(t - 60.0, 1.0), -0.1332047592) / 255.0;
+  float g = t <= 66.0
+    ? (99.4708025861 * log(t) - 161.1195681661) / 255.0
+    : 288.1221695283 * pow(max(t - 60.0, 1.0), -0.0755148492) / 255.0;
+  float b = t >= 66.0 ? 1.0 : t <= 19.0 ? 0.0 : (138.5177312231 * log(max(t - 10.0, 1.0)) - 305.0447927307) / 255.0;
+  return clamp(vec3(r, g, b), 0.0, 1.0);
+}
 
 vec3 palette(float value) {
   value = clamp(value, 0.0, ${f(LUT_MAX)});
@@ -576,7 +801,7 @@ void main() {
   loadTrace(min(ip + ivec2(1, 0), maxP), gx);
   loadTrace(min(ip + ivec2(0, 1), maxP), gy);
 
-  float light = 0.0;
+  vec3 diskLight = vec3(0.0);
   float transmittance = 1.0;
   for (int i = 0; i < ${MAX_CROSSINGS}; i += 1) {
     int k = i * 5;
@@ -610,7 +835,9 @@ void main() {
       disk += layerWeight * textureGrad(uDisk, uv, duvX, duvY).rg;
     }
     float opacity = disk.g * edge;
-    light += transmittance * opacity * g[i * 5 + 3] * disk.r;
+    // g^4 F = (observed temperature / peak temperature)^4, with the edge fade removed
+    float temperature = uPeakTemp * sqrt(sqrt(g[k + 3] / edge));
+    diskLight += transmittance * opacity * g[k + 3] * disk.r * blackbody(temperature);
     transmittance *= 1.0 - opacity;
     if (transmittance < 0.02) break;
   }
@@ -627,8 +854,8 @@ void main() {
   float vignetteY = max(0.0, (pix.y - H * 0.8) / (H * 0.4));
   float vignette = 1.0 - 0.5 * clamp(vignetteX * 0.8 + vignetteY, 0.0, 1.0);
 
-  light = (light * uBrightness + added) * vignette;
-  outColor = vec4(palette(light), 1.0);
+  vec3 disk = 1.0 - exp(-diskLight * uBrightness * vignette * ${f(DISK_EXPOSURE)});
+  outColor = vec4(min(palette(added * vignette) + disk, vec3(1.0)), 1.0);
 }
 `
 
@@ -636,6 +863,10 @@ const COMPOSITE_SOURCE = `${SHADER_HEAD}
 uniform sampler2D uScene;
 uniform float uBloom;
 uniform float uShadowPx;
+uniform float uHorizonPx;
+uniform float uSunPx;
+uniform float uEarthPx;
+uniform float uSolarSystemPx;
 out vec4 outColor;
 
 uniform sampler2D uBlurA;
@@ -688,6 +919,26 @@ void main() {
     float mask = t < 0.5 ? 1.0 - 0.8 * t : max(0.0, 0.6 - 1.2 * (t - 0.5));
     color += uBloom * 4.0 * mask * texture(uBlurC, uv).rgb;
   }
+  if (uHorizonPx > 0.0) {
+    // 1px ring at the event horizon's coordinate radius (1 M = one unit of screen scale)
+    float ring = abs(length(pixelCoord() - vec2(CX, CY)) - uHorizonPx);
+    color = mix(color, vec3(0.45, 0.85, 1.0), clamp(1.0 - ring, 0.0, 1.0));
+  }
+  if (uSunPx > 0.0) {
+    // 1px yellow ring at the Sun's true radius, same scale as the horizon ring
+    float ring = abs(length(pixelCoord() - vec2(CX, CY)) - uSunPx);
+    color = mix(color, vec3(1.0, 0.85, 0.15), clamp(1.0 - ring, 0.0, 1.0));
+  }
+  if (uEarthPx > 0.0) {
+    // 1px violet ring at the Earth's radius, same scale again
+    float ring = abs(length(pixelCoord() - vec2(CX, CY)) - uEarthPx);
+    color = mix(color, vec3(0.8, 0.6, 1.0), clamp(1.0 - ring, 0.0, 1.0));
+  }
+  if (uSolarSystemPx > 0.0) {
+    // 1px green ring at Neptune's orbit, same scale again
+    float ring = abs(length(pixelCoord() - vec2(CX, CY)) - uSolarSystemPx);
+    color = mix(color, vec3(0.4, 1.0, 0.5), clamp(1.0 - ring, 0.0, 1.0));
+  }
   float n1 = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
   float n2 = fract(sin(dot(gl_FragCoord.xy + vec2(19.19, 7.7), vec2(12.9898, 78.233))) * 43758.5453);
   color += (n1 + n2 - 1.0) / 255.0;
@@ -734,6 +985,8 @@ void main() {
 `
 
 onMounted(() => {
+  updateViewport()
+  window.addEventListener('resize', updateViewport)
   const node = canvas.value
   if (!node) return
   gl = node.getContext('webgl2', {
@@ -782,6 +1035,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   mounted = false
+  window.removeEventListener('resize', updateViewport)
   cancelReset()
   window.clearTimeout(timer)
   window.cancelAnimationFrame(frame)
@@ -820,21 +1074,21 @@ function endDrag(event) {
   event.currentTarget.releasePointerCapture?.(event.pointerId)
 }
 
-// The scroll wheel changes the mass (same range as the slider): up grows it, down shrinks it.
-const WHEEL_MASS_PER_PX = 0.0005
-function wheelMass(event) {
+// The scroll wheel zooms (same range as the slider): up zooms in, down zooms out.
+const WHEEL_ZOOM_PER_PX = 0.0005
+function wheelZoom(event) {
   if (controlsDisabled.value) return
   cancelReset()
   // deltaMode 1 is lines, not pixels
   const delta = event.deltaY * (event.deltaMode === 1 ? 33 : 1)
-  mass.value = Math.round(clamp(mass.value - delta * WHEEL_MASS_PER_PX, 0.35, 1.5) * 100) / 100
+  zoom.value = Math.round(clamp(zoom.value - delta * WHEEL_ZOOM_PER_PX, 0.35, 1.5) * 100) / 100
 }
 
 // Reset eases every value back to its default. Detail and contrast rebuild the
 // disk texture, so they jump at the end instead of animating.
 const RESET_MS = 800
 const RESET_KEYS = {
-  bloom, speed, mass, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin,
+  bloom, speed, zoom, massLog, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin,
 }
 let resetFrame = 0
 let resetting = false
@@ -846,7 +1100,10 @@ function cancelReset() {
 
 function resetControls() {
   cancelReset()
-  spinEnabled.value = DEFAULTS.spinEnabled
+  showHorizon.value = DEFAULTS.showHorizon
+  showSun.value = DEFAULTS.showSun
+  showEarth.value = DEFAULTS.showEarth
+  showSolarSystem.value = DEFAULTS.showSolarSystem
   const from = Object.fromEntries(Object.entries(RESET_KEYS).map(([key, control]) => [key, control.value]))
   const fromX = centerX
   const fromY = centerY
@@ -1112,6 +1369,10 @@ function traceRays() {
   gl.uniform1f(traceProgram.uniforms.uRIn, innerRadius.value)
   gl.uniform1f(traceProgram.uniforms.uROut, rOut.value)
   gl.uniform1f(traceProgram.uniforms.uSpin, spin.value)
+  const fluxSpin = Math.max(spin.value, 0.001)
+  const roots = fluxRoots(fluxSpin)
+  gl.uniform4f(traceProgram.uniforms.uRoots, ...roots)
+  gl.uniform1f(traceProgram.uniforms.uFluxNorm, 1 / (peakDiskFlux(fluxSpin, roots) || 1))
   const horizon = 1 + Math.sqrt(1 - spin.value * spin.value)
   gl.uniform1f(traceProgram.uniforms.uCapture, 1 / (horizon + HORIZON_MARGIN))
   drawPass(traceFramebuffer)
@@ -1138,6 +1399,7 @@ function shadeScene() {
   gl.uniform1f(uniforms.uMixA, Math.sin(Math.PI * cycleA) ** 2)
   gl.uniform1f(uniforms.uTemperature, temperature.value)
   gl.uniform1f(uniforms.uBrightness, brightness.value)
+  gl.uniform1f(uniforms.uPeakTemp, PEAK_TEMP_WARM + (PEAK_TEMP_COOL - PEAK_TEMP_WARM) * temperature.value)
   drawPass(sceneFramebuffer)
 }
 
@@ -1188,6 +1450,10 @@ function compositeScene() {
   gl.uniform2f(uniforms.uCenter, centerX, centerY)
   gl.uniform1f(uniforms.uBloom, bloom.value)
   gl.uniform1f(uniforms.uShadowPx, shadowPx)
+  gl.uniform1f(uniforms.uHorizonPx, showHorizon.value ? horizonRadius.value * unit : 0)
+  gl.uniform1f(uniforms.uSunPx, showSun.value ? sunRadius.value * unit : 0)
+  gl.uniform1f(uniforms.uEarthPx, showEarth.value ? earthRadius.value * unit : 0)
+  gl.uniform1f(uniforms.uSolarSystemPx, showSolarSystem.value ? solarSystemRadius.value * unit : 0)
   drawPass(null)
 }
 
@@ -1205,7 +1471,7 @@ function tick(now) {
   if (!mounted) return
   const delta = Math.min(0.1, (now - lastFrameTime) / 1000)
   lastFrameTime = now
-  const spinning = spinEnabled.value && speed.value > 0
+  const spinning = speed.value > 0
   if (spinning) spinTime += delta * speed.value
   if (spinning || dirty) {
     drawFrame()
@@ -1268,18 +1534,54 @@ body,
   position: fixed;
   bottom: 12px;
   left: 12px;
+  /* leave room on the right for the info button */
+  right: 64px;
   z-index: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px;
+  padding: 10px 34px 10px 12px;
   border-radius: 6px;
-  opacity: 0.5;
-  background: rgba(0, 0, 0, 0.1);
+  opacity: 0.9;
+  /* The backdrop is blurred and darkened by what is behind the panel, so a bright
+     bloom gets a darker panel than empty space, and the text stays readable. */
+  background: rgba(0, 0, 0, 0.35);
+  -webkit-backdrop-filter: blur(10px) brightness(0.45);
+  backdrop-filter: blur(10px) brightness(0.45);
   color: var(--panel-ink, #e8d6c0);
   font: 13px ui-sans-serif, system-ui, sans-serif;
   user-select: none;
   accent-color: var(--panel-accent, #ee9648);
+}
+
+.control-groups {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 10px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+}
+
+/* the disk has the most controls, so its sliders run in two columns to keep the panel low */
+.control-group.two-columns {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 6px 18px;
+}
+
+.control-group legend {
+  padding: 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
 }
 
 .control-panel label {
@@ -1289,31 +1591,30 @@ body,
   cursor: pointer;
 }
 
-.control-panel .speed-control,
-.control-panel .temperature-control,
-.control-panel .radius-control,
-.control-panel .mass-control {
+.control-panel .radius-control {
   display: grid;
-  grid-template-columns: 76px 110px 40px;
+  grid-template-columns: 78px 110px 48px;
 }
 
-.control-panel .speed-control input,
-.control-panel .temperature-control input,
-.control-panel .radius-control input,
-.control-panel .mass-control input {
+.control-panel .radius-control input {
   width: 100%;
   margin: 0;
 }
 
-.control-panel .radius-control output,
-.control-panel .mass-control output {
+.control-panel .radius-control output {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
+.control-panel .mass-readout {
+  opacity: 0.8;
+  font-size: 12px;
+}
+
 .control-panel .button-row {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
 }
 
 .control-panel .reset-button {
@@ -1329,6 +1630,16 @@ body,
 .control-panel .reset-button:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+.ring-label {
+  position: fixed;
+  z-index: 1;
+  font: 11px/14px ui-sans-serif, system-ui, sans-serif;
+  text-shadow: 0 0 3px #000, 0 0 3px #000;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
 }
 
 .fps-counter {
@@ -1356,7 +1667,14 @@ body,
 }
 
 .info-box.open {
+  z-index: 2;
+}
+
+/* the box itself is the content, so it can fade and slide like the control panel */
+.info-content {
   max-width: 300px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
   padding: 8px 12px;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.55);
@@ -1430,6 +1748,33 @@ body,
   left: 12px;
   z-index: 1;
   padding: 3px 10px;
+}
+
+/* Fade and slide up when shown, back down when hidden */
+.panel-enter-active {
+  transition: opacity 0.35s ease-out, transform 0.35s ease-out;
+}
+
+.panel-leave-active {
+  transition: opacity 0.2s ease-in, transform 0.2s ease-in;
+}
+
+.panel-enter-from,
+.panel-leave-to {
+  opacity: 0;
+  transform: translateY(14px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-enter-active,
+  .panel-leave-active {
+    transition: opacity 0.2s;
+  }
+
+  .panel-enter-from,
+  .panel-leave-to {
+    transform: none;
+  }
 }
 
 .control-panel.busy,
