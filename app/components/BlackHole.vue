@@ -72,20 +72,64 @@
             </div>
           </template>
           <template #display>
-            <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2">
-              <ControlSlider v-model="bloom" label="Bloom" hint="Strength of the glow around bright areas. Purely cosmetic; 0 turns it off." :min="0" :max="2" :step="0.05" :display="bloom.toFixed(2)" :disabled="controlsDisabled" />
-              <UTooltip :ui="tipUi" text="Draw a thin ring at the true size of the event horizon. The black disc you see is larger: it is the shadow, where light bent by gravity is lost.">
-                <UCheckbox v-model="showHorizon" label="Show event horizon" :disabled="controlsDisabled" />
-              </UTooltip>
-              <UTooltip :ui="tipUi" text="Draw a yellow ring with the Sun's true radius (695,700 km) at the same scale. Raise the mass and the Sun shrinks relative to the hole. For a hole of a few solar masses the Sun is larger than the screen.">
-                <UCheckbox v-model="showSun" label="Show Sun for scale" :disabled="controlsDisabled" />
-              </UTooltip>
-              <UTooltip :ui="tipUi" text="Draw a violet ring with the Earth's true radius (6,371 km) at the same scale. It is off-screen for small holes and shrinks to a dot above a few hundred thousand solar masses; it is easiest to see between a few hundred and a few hundred thousand.">
-                <UCheckbox v-model="showEarth" label="Show Earth for scale" :disabled="controlsDisabled" />
-              </UTooltip>
-              <UTooltip :ui="tipUi" text="Draw a green ring the size of the Solar System out to Neptune's orbit (30 AU, 4.5 billion km radius) at the same scale. It only fits on screen for very massive holes, roughly a billion solar masses or more.">
-                <UCheckbox v-model="showSolarSystem" label="Show Solar System (Neptune)" :disabled="controlsDisabled" />
-              </UTooltip>
+            <div class="grid gap-x-8 gap-y-4 pt-3 md:grid-cols-2 xl:grid-cols-4">
+              <div class="space-y-3">
+                <USeparator label="Colour and glow" />
+                <ControlSlider v-model="bloom" label="Bloom" hint="Strength of the glow around bright areas. Purely cosmetic; 0 turns it off." :min="0" :max="2" :step="0.05" :display="bloom.toFixed(2)" :disabled="controlsDisabled" />
+                <UTooltip :ui="tipUi" text="Colour the disk by how much its light is shifted in frequency, instead of by temperature. Red is redshifted (g below 1): matter moving away from you, or deep in the gravitational well. Blue is blueshifted (g above 1): matter moving towards you. White is unshifted. Brightness still includes the relativistic beaming, so the approaching side is bright and blue, the receding side dim and red.">
+                  <UCheckbox v-model="showShift" label="Show redshift and blueshift" :disabled="controlsDisabled" />
+                </UTooltip>
+                <div v-if="showShift" class="space-y-1">
+                  <div class="h-2 rounded-full bg-linear-to-r from-red-500 via-white to-blue-400" />
+                  <div class="flex justify-between text-xs text-muted">
+                    <span>Redshift</span>
+                    <span>g = 1</span>
+                    <span>Blueshift</span>
+                  </div>
+                </div>
+              </div>
+              <div class="space-y-3">
+                <USeparator label="Scale rings" />
+                <UTooltip :ui="tipUi" text="Draw a thin ring at the true size of the event horizon. The black disc you see is larger: it is the shadow, where light bent by gravity is lost.">
+                  <UCheckbox v-model="showHorizon" label="Show event horizon" :disabled="controlsDisabled" />
+                </UTooltip>
+                <UTooltip :ui="tipUi" text="Draw a yellow ring with the Sun's true radius (695,700 km) at the same scale. Raise the mass and the Sun shrinks relative to the hole. For a hole of a few solar masses the Sun is larger than the screen.">
+                  <UCheckbox v-model="showSun" label="Show Sun for scale" :disabled="controlsDisabled" />
+                </UTooltip>
+                <UTooltip :ui="tipUi" text="Draw a violet ring with the Earth's true radius (6,371 km) at the same scale. It is off-screen for small holes and shrinks to a dot above a few hundred thousand solar masses; it is easiest to see between a few hundred and a few hundred thousand.">
+                  <UCheckbox v-model="showEarth" label="Show Earth for scale" :disabled="controlsDisabled" />
+                </UTooltip>
+                <UTooltip :ui="tipUi" text="Draw a green ring the size of the Solar System out to Neptune's orbit (30 AU, 4.5 billion km radius) at the same scale. It only fits on screen for very massive holes, roughly a billion solar masses or more.">
+                  <UCheckbox v-model="showSolarSystem" label="Show Solar System (Neptune)" :disabled="controlsDisabled" />
+                </UTooltip>
+              </div>
+              <div class="space-y-3">
+                <USeparator label="Rubber sheet" />
+                <UTooltip :ui="tipUi" text="Draw the classic rubber-sheet picture: the plane of the disk bent into a funnel (an embedding diagram, Flamm's paraboloid for a non-spinning hole). Distances along the sheet match the curved space, so the funnel shows how space stretches towards the hole. It is a diagram drawn over the picture, not what a camera would see, and for a spinning hole it is only an approximation.">
+                  <UCheckbox v-model="showSheet" label="Show rubber sheet" :disabled="controlsDisabled" />
+                </UTooltip>
+                <ControlSlider v-model="sheetSize" label="Sheet size" hint="Radius of the sheet in units of GM/c², where the event horizon of a non-spinning hole is at 2." :min="8" :max="60" :step="2" :display="`${sheetSize} M`" :disabled="controlsDisabled || !showSheet" />
+              </div>
+              <div class="space-y-3">
+                <USeparator label="Spacetime grid" />
+                <UTooltip :ui="tipUi" text="Draw a 3D grid in the hole's coordinate frame (z is the spin axis) and trace its light through the same curved space. Straight lines far away bend, stretch and wrap around the hole, which shows the lensing. The grid is in coordinate space, so it shows how light is bent, not an intrinsic measure of curvature.">
+                  <UCheckbox v-model="showGrid" label="Show spacetime grid" :disabled="controlsDisabled" />
+                </UTooltip>
+                <ControlSlider v-model="gridSize" label="Grid size" hint="Side length of the grid cube in units of GM/c², where the event horizon of a non-spinning hole is at 2. Changing it scales the grid and keeps the number of lines." :min="8" :max="120" :step="2" :display="`${gridSize} M`" :disabled="controlsDisabled || !showGrid" />
+                <ControlSlider v-model="gridLines" label="Grid lines" hint="How many cells each side of the grid cube is divided into, so there is one more line than this along each axis. More lines make a finer grid of the same size, but cost more to trace and look busier." :min="2" :max="32" :step="2" :display="`${gridLines}`" :disabled="controlsDisabled || !showGrid" />
+                <UTooltip :ui="tipUi" text="Which planes of the grid to draw. X is the plane through the hole where x = 0, Y where y = 0, and Z where z = 0, which is the disk plane (z is the spin axis). Turn on Full 3D grid to repeat each plane through space.">
+                  <UFormField label="Grid planes">
+                    <div class="flex gap-4">
+                      <UCheckbox v-model="showGridX" label="X" :disabled="controlsDisabled || !showGrid" />
+                      <UCheckbox v-model="showGridY" label="Y" :disabled="controlsDisabled || !showGrid" />
+                      <UCheckbox v-model="showGridZ" label="Z" :disabled="controlsDisabled || !showGrid" />
+                    </div>
+                  </UFormField>
+                </UTooltip>
+                <UTooltip :ui="tipUi" text="Repeat each selected plane every grid spacing through space, filling it with a 3D lattice. Off draws only the plane through the hole.">
+                  <UCheckbox v-model="showGridStack" label="Full 3D grid" :disabled="controlsDisabled || !showGrid" />
+                </UTooltip>
+              </div>
             </div>
           </template>
         </UTabs>
@@ -253,6 +297,16 @@ const DEFAULTS = {
   showSun: false,
   showEarth: false,
   showSolarSystem: false,
+  showGrid: false,
+  gridSize: 48,
+  gridLines: 8,
+  showGridX: true,
+  showGridY: true,
+  showGridZ: true,
+  showGridStack: true,
+  showSheet: false,
+  showShift: false,
+  sheetSize: 16,
   temperature: 0,
   brightness: 0.7,
   roll: 15.5,
@@ -273,6 +327,16 @@ const showHorizon = ref(DEFAULTS.showHorizon)
 const showSun = ref(DEFAULTS.showSun)
 const showEarth = ref(DEFAULTS.showEarth)
 const showSolarSystem = ref(DEFAULTS.showSolarSystem)
+const showGrid = ref(DEFAULTS.showGrid)
+const gridSize = ref(DEFAULTS.gridSize)
+const gridLines = ref(DEFAULTS.gridLines)
+const showGridX = ref(DEFAULTS.showGridX)
+const showGridY = ref(DEFAULTS.showGridY)
+const showGridZ = ref(DEFAULTS.showGridZ)
+const showGridStack = ref(DEFAULTS.showGridStack)
+const showSheet = ref(DEFAULTS.showSheet)
+const showShift = ref(DEFAULTS.showShift)
+const sheetSize = ref(DEFAULTS.sheetSize)
 const EARTH_RADIUS_KM = 6371
 const SOLAR_RADIUS_KM = 695700
 const MASS_LOG_MIN = 0
@@ -341,6 +405,11 @@ let unit = shadowPx / 5.196
 let needsTrace = true
 let dirty = true
 let mounted = false
+let sheetProgram
+let sheetVao
+let sheetBuffer
+let sheetCount = 0
+let sheetKey = ''
 
 // The address is only assembled client-side once the info box is opened, so it
 // is never in the served HTML or the bundle as a literal string.
@@ -463,7 +532,12 @@ function peakDiskFlux(a, roots) {
   return peak
 }
 
-watch([rIn, rOut, roll, pitch, yaw, spin], () => {
+// the rubber sheet is a line overlay drawn after the shading, so it needs no new trace
+watch([showSheet, sheetSize, showShift], () => {
+  dirty = true
+})
+
+watch([rIn, rOut, roll, pitch, yaw, spin, showGrid, gridSize, gridLines, showGridX, showGridY, showGridZ, showGridStack], () => {
   needsTrace = true
   dirty = true
 })
@@ -519,6 +593,14 @@ uniform float uROut;
 uniform float uIncl;
 uniform float uSpin;
 uniform float uCapture;
+// Spacetime grid: lattice spacing in GM/c^2 (0 = off), half the cube's size and line width in the same units
+uniform float uGridSpacing;
+uniform float uGridExtent;
+// Which axes (x, y, z) have grid planes, 1 or 0, and whether the whole stack of planes
+// is drawn (1) or only the one through the hole, at 0 (0)
+uniform vec3 uGridAxes;
+uniform float uGridStack;
+uniform float uGridWidth;
 // Page & Thorne roots (sqrt(r_isco), x1, x2, x3) and 1 / peak flux, see novikovThorneFlux
 uniform vec4 uRoots;
 uniform float uFluxNorm;
@@ -534,6 +616,36 @@ int gCount = 0;
 float gL = 0.0;
 float gC = 0.0;
 float gK = 0.0;
+// Strongest grid line seen along the current ray, 0 to 1
+float gGrid = 0.0;
+
+float gridCoverage(float distance) {
+  return 1.0 - smoothstep(0.5 * uGridWidth, 1.5 * uGridWidth, distance);
+}
+
+float latticeDistance(float x) {
+  return abs(x - uGridSpacing * floor(x / uGridSpacing + 0.5));
+}
+
+// A 3D lattice in the hole's Boyer-Lindquist Cartesian frame (z is the spin axis).
+// A ray is almost never exactly on a line, so lines are drawn where it crosses a
+// lattice plane close to one of that plane's lines. The three plane families
+// together give every line of the lattice.
+void gridSegment(vec3 from, vec3 to, float extent) {
+  vec3 cellFrom = floor(from / uGridSpacing);
+  vec3 cellTo = floor(to / uGridSpacing);
+  for (int k = 0; k < 3; k += 1) {
+    if (uGridAxes[k] < 0.5 || cellFrom[k] == cellTo[k]) continue;
+    float planeIndex = max(cellFrom[k], cellTo[k]);
+    if (uGridStack < 0.5 && planeIndex != 0.0) continue;
+    float plane = planeIndex * uGridSpacing;
+    vec3 q = mix(from, to, (plane - from[k]) / (to[k] - from[k]));
+    if (any(greaterThan(abs(q), vec3(extent)))) continue;
+    float lineA = gridCoverage(latticeDistance(q[(k + 1) % 3]));
+    float lineB = gridCoverage(latticeDistance(q[(k + 2) % 3]));
+    gGrid = max(gGrid, max(lineA, lineB));
+  }
+}
 
 float rootTerm(float xi, float xj, float xk, float x, float a) {
   return 3.0 * (xi - a) * (xi - a) / (xi * (xi - xj) * (xi - xk))
@@ -580,7 +692,8 @@ void record(float radius, float angle) {
   gData[base + 1] = textureAngle;
   gData[base + 2] = pow(uRIn / radius, SHEAR);
   gData[base + 3] = flux * pow(redshift, 4.0) * edge;
-  gData[base + 4] = edge;
+  // the edge weight (0 to 1) rides in the fraction and the shift factor g, in thousandths, in the integer part
+  gData[base + 4] = floor(redshift * 1000.0 + 0.5) + edge * 0.99;
   gCount += 1;
 }
 
@@ -626,6 +739,11 @@ void traceRay(vec2 screen, float cosObs, float sinObs) {
   vec3 v = vec3(-beta * cosObs, alpha, beta * sinObs);
   float extra = 0.0;
   float nearCount = 0.0;
+  float gridExtent = uGridExtent;
+  // the lattice cube fits inside a sphere of 1.74 times its half-size
+  float gridMinU = 1.0 / (1.74 * gridExtent);
+  vec3 gridPrev = vec3(0.0);
+  bool hasGridPrev = false;
 
   for (int iter = 0; iter < MAX_STEPS; iter += 1) {
     float rate = max(sqrt(dot(v, v)), abs(dExtra(u)));
@@ -685,8 +803,20 @@ void traceRay(vec2 screen, float cosObs, float sinObs) {
       }
     }
 
-    if (nextU >= uCapture) return;
-    if (nextU <= 0.0) {
+    if (uGridSpacing > 0.0) {
+      if (nextU > gridMinU) {
+        float cs = cos(nextExtra);
+        float sn = sin(nextExtra);
+        vec3 gridPoint = vec3(nextN.x * cs - nextN.y * sn, nextN.x * sn + nextN.y * cs, nextN.z) / nextU;
+        if (hasGridPrev) gridSegment(gridPrev, gridPoint, gridExtent);
+        gridPrev = gridPoint;
+        hasGridPrev = true;
+      } else {
+        hasGridPrev = false;
+      }
+    }
+
+    if (nextU >= uCapture) return;    if (nextU <= 0.0) {
       gData[15] = nearCount;
       return;
     }
@@ -703,6 +833,8 @@ void traceRay(vec2 screen, float cosObs, float sinObs) {
 void main() {
   for (int i = 0; i < 16; i += 1) gData[i] = 0.0;
   traceRay(rayCoord(pixelCoord(), uUnit), cos(uIncl), sin(uIncl));
+  // gData[15] is the photon-ring step count (an integer); the grid coverage rides in its fraction
+  gData[15] += min(gGrid, 1.0) * 0.99;
   o0 = vec4(gData[0], gData[1], gData[2], gData[3]);
   o1 = vec4(gData[4], gData[5], gData[6], gData[7]);
   o2 = vec4(gData[8], gData[9], gData[10], gData[11]);
@@ -728,6 +860,7 @@ uniform float uMixA;
 uniform float uTemperature;
 uniform float uBrightness;
 uniform float uPeakTemp;
+uniform float uShift;
 out vec4 outColor;
 
 // Blackbody colour (Tanner Helland's fit to the Planckian locus, 1000-40000 K),
@@ -780,8 +913,10 @@ void main() {
   float transmittance = 1.0;
   for (int i = 0; i < ${MAX_CROSSINGS}; i += 1) {
     int k = i * 5;
-    float edge = g[k + 4];
-    if (edge <= 0.0) continue;
+    float packed = g[k + 4];
+    if (packed <= 0.0) continue;
+    float edge = fract(packed) / 0.99;
+    float shift = floor(packed) / 1000.0;
     // Differential rotation shears the texture without bound, so it is sampled
     // at two phases that each wrap every cycle and are cross-faded; each layer
     // has zero weight at the moment it resets.
@@ -812,7 +947,11 @@ void main() {
     float opacity = disk.g * edge;
     // g^4 F = (observed temperature / peak temperature)^4, with the edge fade removed
     float temperature = uPeakTemp * sqrt(sqrt(g[k + 3] / edge));
-    diskLight += transmittance * opacity * g[k + 3] * disk.r * blackbody(temperature);
+    // Optionally colour by the shift itself: red where light is redshifted (g < 1, receding
+    // or deep in the well), blue where it is blueshifted (g > 1), white where unchanged.
+    float shiftLog = clamp(log2(shift), -1.0, 1.0);
+    vec3 shiftColor = mix(vec3(1.0), shiftLog > 0.0 ? vec3(0.25, 0.55, 1.0) : vec3(1.0, 0.2, 0.1), abs(shiftLog));
+    diskLight += transmittance * opacity * g[k + 3] * disk.r * mix(blackbody(temperature), shiftColor, uShift);
     transmittance *= 1.0 - opacity;
     if (transmittance < 0.02) break;
   }
@@ -821,7 +960,8 @@ void main() {
   // Photon ring: rays that escape after winding around the hole near the photon
   // orbit, measured by how many steps they spent close in (g[15]). Their shape
   // follows the Kerr shadow rather than a fixed circle.
-  float added = 0.8 * smoothstep(60.0, 220.0, g[15]);
+  float grid = fract(g[15]) / 0.99;
+  float added = 0.8 * smoothstep(60.0, 220.0, floor(g[15]));
   float shadowDistance = length(pix - vec2(CX, CY));
   added += 0.012 + 0.05 * exp(-shadowDistance / (uShadowPx * 2.0))
     * (shadowDistance > uShadowPx ? 1.0 : 0.1);
@@ -829,8 +969,40 @@ void main() {
   float vignetteY = max(0.0, (pix.y - H * 0.8) / (H * 0.4));
   float vignette = 1.0 - 0.5 * clamp(vignetteX * 0.8 + vignetteY, 0.0, 1.0);
 
-  vec3 disk = 1.0 - exp(-diskLight * uBrightness * vignette * ${f(DISK_EXPOSURE)});
-  outColor = vec4(min(palette(added * vignette) + disk, vec3(1.0)), 1.0);
+  vec3 disk = 1.0 - exp(-diskLight * uBrightness * vignette * mix(1.0, 0.4, uShift) * ${f(DISK_EXPOSURE)});
+  vec3 gridLight = vec3(0.3, 0.62, 1.0) * grid * 0.55;
+  outColor = vec4(min(palette(added * vignette) + disk + gridLight, vec3(1.0)), 1.0);
+}
+`
+
+// The rubber sheet is drawn as lines over the shaded scene, with the same orthographic
+// camera as the trace: a world point projects to (alpha, beta) = (y, -cos(incl) x + sin(incl) z),
+// which the tilt then rotates onto the screen.
+const SHEET_VERTEX_SOURCE = `#version 300 es
+precision highp float;
+const float W = ${f(WIDTH)};
+const float H = ${f(HEIGHT)};
+layout(location = 0) in vec3 aPosition;
+uniform vec2 uCenter;
+uniform float uTilt;
+uniform float uIncl;
+uniform float uUnit;
+void main() {
+  float alpha = aPosition.y;
+  float beta = -cos(uIncl) * aPosition.x + sin(uIncl) * aPosition.z;
+  float screenX = alpha * cos(uTilt) - beta * sin(uTilt);
+  float screenY = alpha * sin(uTilt) + beta * cos(uTilt);
+  float px = uCenter.x + screenX * uUnit;
+  float py = uCenter.y - screenY * uUnit;
+  gl_Position = vec4(px / W * 2.0 - 1.0, 1.0 - py / H * 2.0, 0.0, 1.0);
+}
+`
+
+const SHEET_FRAGMENT_SOURCE = `#version 300 es
+precision highp float;
+out vec4 outColor;
+void main() {
+  outColor = vec4(0.4, 1.0, 0.75, 1.0) * 0.6;
 }
 `
 
@@ -1079,6 +1251,16 @@ function resetControls() {
   showSun.value = DEFAULTS.showSun
   showEarth.value = DEFAULTS.showEarth
   showSolarSystem.value = DEFAULTS.showSolarSystem
+  showGrid.value = DEFAULTS.showGrid
+  gridSize.value = DEFAULTS.gridSize
+  gridLines.value = DEFAULTS.gridLines
+  showGridX.value = DEFAULTS.showGridX
+  showGridY.value = DEFAULTS.showGridY
+  showGridZ.value = DEFAULTS.showGridZ
+  showGridStack.value = DEFAULTS.showGridStack
+  showSheet.value = DEFAULTS.showSheet
+  showShift.value = DEFAULTS.showShift
+  sheetSize.value = DEFAULTS.sheetSize
   const from = Object.fromEntries(Object.entries(RESET_KEYS).map(([key, control]) => [key, control.value]))
   const fromX = centerX
   const fromY = centerY
@@ -1207,9 +1389,9 @@ function compileShader(type, source) {
   return shader
 }
 
-function createProgram(fragmentSource) {
+function createProgram(fragmentSource, vertexSource = VERTEX_SOURCE) {
   const program = gl.createProgram()
-  gl.attachShader(program, compileShader(gl.VERTEX_SHADER, VERTEX_SOURCE))
+  gl.attachShader(program, compileShader(gl.VERTEX_SHADER, vertexSource))
   gl.attachShader(program, compileShader(gl.FRAGMENT_SHADER, fragmentSource))
   gl.linkProgram(program)
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
@@ -1285,6 +1467,14 @@ function initGpu() {
   compositeProgram = createProgram(COMPOSITE_SOURCE)
   downsampleProgram = createProgram(DOWNSAMPLE_SOURCE)
   blurProgram = createProgram(BLUR_SOURCE)
+  sheetProgram = createProgram(SHEET_FRAGMENT_SOURCE, SHEET_VERTEX_SOURCE)
+  sheetVao = gl.createVertexArray()
+  gl.bindVertexArray(sheetVao)
+  sheetBuffer = gl.createBuffer()
+  gl.bindBuffer(gl.ARRAY_BUFFER, sheetBuffer)
+  gl.enableVertexAttribArray(0)
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0)
+  gl.bindVertexArray(vao)
 
   diskTexture = createDiskTexture()
 
@@ -1350,6 +1540,13 @@ function traceRays() {
   gl.uniform1f(traceProgram.uniforms.uFluxNorm, 1 / (peakDiskFlux(fluxSpin, roots) || 1))
   const horizon = 1 + Math.sqrt(1 - spin.value * spin.value)
   gl.uniform1f(traceProgram.uniforms.uCapture, 1 / (horizon + HORIZON_MARGIN))
+  // the cube keeps its size when lines are added: the spacing is the size over the number of cells
+  gl.uniform1f(traceProgram.uniforms.uGridSpacing, showGrid.value ? gridSize.value / gridLines.value : 0)
+  gl.uniform1f(traceProgram.uniforms.uGridExtent, gridSize.value / 2)
+  gl.uniform3f(traceProgram.uniforms.uGridAxes, showGridX.value ? 1 : 0, showGridY.value ? 1 : 0, showGridZ.value ? 1 : 0)
+  gl.uniform1f(traceProgram.uniforms.uGridStack, showGridStack.value ? 1 : 0)
+  // about 1.2 screen pixels, in the same units as the lattice
+  gl.uniform1f(traceProgram.uniforms.uGridWidth, 1.2 / unit)
   drawPass(traceFramebuffer)
 }
 
@@ -1375,6 +1572,7 @@ function shadeScene() {
   gl.uniform1f(uniforms.uTemperature, temperature.value)
   gl.uniform1f(uniforms.uBrightness, brightness.value)
   gl.uniform1f(uniforms.uPeakTemp, PEAK_TEMP_WARM + (PEAK_TEMP_COOL - PEAK_TEMP_WARM) * temperature.value)
+  gl.uniform1f(uniforms.uShift, showShift.value ? 1 : 0)
   drawPass(sceneFramebuffer)
 }
 
@@ -1432,12 +1630,98 @@ function compositeScene() {
   drawPass(null)
 }
 
+// Embedding diagram of the equatorial plane: the surface whose own (flat) geometry matches
+// the curved space there, like a heavy ball on a rubber sheet. With the radial proper
+// distance dl = sqrt(g_rr) dr and circumference 2 pi r, the depth follows
+// dz/dr = sqrt(r^2 / Delta - 1) with Delta = r^2 - 2 r + a^2. For no spin this is Flamm's
+// paraboloid z = 2 sqrt(2 (r - 2)); with spin it is only an approximation, because the
+// circumference is not exactly 2 pi r. Substituting r = r+ + t^2 removes the singularity
+// at the horizon: dz/dt = 2 sqrt((2 r - a^2) / (r - r-)).
+const SHEET_RINGS = 14
+const SHEET_SPOKES = 24
+const SHEET_STEPS = 80
+const SHEET_AROUND = 96
+const SHEET_PROFILE = 400
+
+function buildSheet() {
+  const a = spin.value
+  const root = Math.sqrt(1 - a * a)
+  const rPlus = 1 + root
+  const rMinus = 1 - root
+  const extent = sheetSize.value
+  const tMax = Math.sqrt(extent - rPlus)
+  const slope = (t) => {
+    const r = rPlus + t * t
+    return 2 * Math.sqrt((2 * r - a * a) / (r - rMinus))
+  }
+  const profile = new Float64Array(SHEET_PROFILE + 1)
+  const dt = tMax / SHEET_PROFILE
+  for (let i = 1; i <= SHEET_PROFILE; i += 1) {
+    const t = (i - 1) * dt
+    profile[i] = profile[i - 1] + dt * (slope(t) + 4 * slope(t + dt / 2) + slope(t + dt)) / 6
+  }
+  // The throat sits at the hole (z = 0) and the sheet flares up from it, so the hole is at the bottom of the well
+  const height = (t) => {
+    const position = Math.min(SHEET_PROFILE, t / dt)
+    const index = Math.min(SHEET_PROFILE - 1, Math.floor(position))
+    const depth = profile[index] + (profile[index + 1] - profile[index]) * (position - index)
+    return depth
+  }
+  const point = (t, angle) => {
+    const r = rPlus + t * t
+    return [r * Math.cos(angle), r * Math.sin(angle), height(t)]
+  }
+
+  const vertices = []
+  for (let k = 0; k <= SHEET_RINGS; k += 1) {
+    const t = Math.sqrt((extent - rPlus) * k / SHEET_RINGS)
+    for (let i = 0; i < SHEET_AROUND; i += 1) {
+      vertices.push(...point(t, TAU * i / SHEET_AROUND), ...point(t, TAU * (i + 1) / SHEET_AROUND))
+    }
+  }
+  for (let j = 0; j < SHEET_SPOKES; j += 1) {
+    const angle = TAU * j / SHEET_SPOKES
+    for (let i = 0; i < SHEET_STEPS; i += 1) {
+      vertices.push(...point(tMax * i / SHEET_STEPS, angle), ...point(tMax * (i + 1) / SHEET_STEPS, angle))
+    }
+  }
+  return new Float32Array(vertices)
+}
+
+function drawSheet() {
+  if (!showSheet.value) return
+  gl.bindVertexArray(sheetVao)
+  const key = `${spin.value}|${sheetSize.value}`
+  if (key !== sheetKey) {
+    const data = buildSheet()
+    gl.bindBuffer(gl.ARRAY_BUFFER, sheetBuffer)
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW)
+    sheetCount = data.length / 3
+    sheetKey = key
+  }
+  const { program, uniforms } = sheetProgram
+  gl.useProgram(program)
+  const view = viewAngles()
+  gl.uniform2f(uniforms.uCenter, centerX, centerY)
+  gl.uniform1f(uniforms.uTilt, view.tilt)
+  gl.uniform1f(uniforms.uIncl, view.incl)
+  gl.uniform1f(uniforms.uUnit, unit)
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFramebuffer)
+  gl.viewport(0, 0, WIDTH, HEIGHT)
+  gl.enable(gl.BLEND)
+  gl.blendFunc(gl.ONE, gl.ONE)
+  gl.drawArrays(gl.LINES, 0, sheetCount)
+  gl.disable(gl.BLEND)
+  gl.bindVertexArray(vao)
+}
+
 function drawFrame() {
   if (needsTrace) {
     traceRays()
     needsTrace = false
   }
   shadeScene()
+  drawSheet()
   if (bloom.value > 0) renderBloom()
   compositeScene()
 }
