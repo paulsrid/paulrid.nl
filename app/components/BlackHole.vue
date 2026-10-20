@@ -378,6 +378,14 @@ const infoTopics = [
     ],
   },
   {
+    label: 'Spin and frame dragging',
+    icon: 'i-lucide-rotate-cw',
+    paragraphs: [
+      `Spin a/M is the hole's angular momentum in units of GM²/c, not a speed. 0 is a non-rotating (Schwarzschild) hole. 1 is the extremal limit, where the horizon has shrunk to GM/c², half its size without spin. The slider stops at 0.998, the limit Thorne found in 1974 for a hole spun up by a thin disk: it swallows more of the disk's counter-rotating light than its co-rotating light, which stops the spin-up there.`,
+      `A spinning hole drags space around with it (frame dragging). Its effects here: the disk's inner edge, the innermost stable orbit, moves in from 6 GM/c² at spin 0 to about 1.24 GM/c² at 0.998; the shadow is flattened and shifted to one side; and the side of the disk moving towards you gets brighter and bluer. Going above 1 is possible only as an experiment, described below.`,
+    ],
+  },
+  {
     label: 'Scale rings and the photon sphere',
     icon: 'i-lucide-circle-dot',
     paragraphs: [
@@ -413,7 +421,7 @@ const infoTopics = [
     label: 'Controls',
     icon: 'i-lucide-sliders-horizontal',
     paragraphs: [
-      `Drag to rotate the view and scroll to zoom. The controls drawer groups the settings into tabs: the black hole (mass, spin), the view (zoom, pitch, yaw, roll), the accretion disk (speed, orbit velocity, temperature, brightness, edges, texture) and the display (bloom, redshift colours, scale rings, the rubber sheet and the spacetime grid). Hover over any control for an explanation, and Reset eases everything back to the defaults. The counter in the top right shows rendered frames per second.`,
+      `Drag to rotate the view and scroll to zoom. The controls drawer groups the settings into tabs: the black hole (mass, spin, and the option to allow spin above 1), the view (zoom, pitch, yaw, roll), the accretion disk (speed, orbit velocity, temperature, brightness, inner and outer edge, texture detail and contrast) and the display (bloom, redshift colours, the scale rings and photon sphere, the rubber sheet and the spacetime grid). Hover over any control for an explanation, and Reset eases everything back to the defaults. The counter in the top right shows rendered frames per second.`,
     ],
   },
   {
