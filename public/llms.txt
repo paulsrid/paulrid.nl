@@ -1,0 +1,5 @@
+# Paul Rid
+
+> An interactive, real-time simulation of a spinning (Kerr) black hole, ray-traced in WebGL2 in the browser.
+
+- [Black hole simulation](https://paulrid.nl/): Gravitational lensing, a Novikov-Thorne accretion disk with Doppler and gravitational redshift, adjustable spin and mass (1 to 66 billion solar masses), and scale rings for the event horizon, Earth, Sun and the orbit of Neptune. Method follows James et al. (2015), "Gravitational lensing by spinning black holes in astrophysics, and in the movie Interstellar".
