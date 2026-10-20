@@ -1,138 +1,176 @@
 <template>
-  <main class="black-hole-stage">
-    <button
+  <div>
+    <UButton
       v-if="panelHidden"
-      type="button"
-      class="panel-toggle show-panel"
-      aria-label="Show controls"
+      class="fixed bottom-3 left-3 z-10"
+      color="neutral"
+      variant="subtle"
+      icon="i-lucide-sliders-horizontal"
+      label="Controls"
       @click="panelHidden = false"
-    >
-      Controls
-    </button>
-    <Transition name="panel">
-    <section v-show="!panelHidden" class="control-panel" :class="{ busy }" :style="panelColors" aria-label="Black hole controls">
-      <button
-        type="button"
-        class="panel-toggle hide-panel"
-        aria-label="Hide controls"
-        title="Hide controls"
-        @click="panelHidden = true"
+    />
+    <div class="fixed top-3 right-3 z-10 flex items-center gap-2">
+      <UBadge
+        v-if="fps !== null"
+        color="neutral"
+        variant="subtle"
+        class="font-mono tabular-nums"
+        aria-label="Frames per second"
       >
-        x
-      </button>
-      <div class="control-groups">
-        <fieldset class="control-group">
-          <legend>Black hole</legend>
-          <label class="radius-control" title="Mass of the black hole in solar masses (logarithmic, 1 to 66 billion). The default is about Sagittarius A*. The picture looks the same at any mass, because the physics scales with it; mass sets the real size, shown as the horizon radius.">
-            Mass (M☉)
-            <input v-model.number="massLog" type="range" :min="MASS_LOG_MIN" :max="MASS_LOG_MAX" step="0.02" :disabled="controlsDisabled">
-            <output>{{ formatMass(solarMass) }}</output>
-          </label>
-          <label class="radius-control" title="Spin of the black hole, a/M, from 0 (not rotating) to 0.998 (nearly the maximum). More spin drags space around, shrinks the horizon, moves the disk's inner edge closer and flattens the shadow.">
-            Spin a/M
-            <input v-model.number="spin" type="range" min="0" :max="MAX_SPIN" step="0.002" :disabled="controlsDisabled">
-            <output>{{ spin.toFixed(3) }}</output>
-          </label>
-          <span class="mass-readout" title="Size of the event horizon (the point of no return) for the chosen mass and spin. It shrinks as the spin grows.">Horizon radius {{ formatLength(horizonKm) }}</span>
-        </fieldset>
-        <fieldset class="control-group">
-          <legend>View</legend>
-          <label class="radius-control" title="Camera distance: how large the hole appears on screen. It does not change the physics. The scroll wheel does the same.">
-            Zoom
-            <input v-model.number="zoom" type="range" min="0.1" max="1.5" step="0.05" :disabled="controlsDisabled">
-            <output>{{ Math.round(zoom * 100) }}%</output>
-          </label>
-          <label class="radius-control" title="Tilt of the disk towards the viewer. 0° sees it edge-on, 89° almost face-on. Dragging up or down changes it.">
-            Pitch
-            <input v-model.number="pitch" type="range" min="0" max="89" step="1" :disabled="controlsDisabled">
-            <output>{{ Math.round(pitch) }}°</output>
-          </label>
-          <label class="radius-control" title="Swing the disk's tilt to the left or right. Dragging sideways changes it.">
-            Yaw
-            <input v-model.number="yaw" type="range" min="-90" max="90" step="1" :disabled="controlsDisabled">
-            <output>{{ Math.round(yaw) }}°</output>
-          </label>
-          <label class="radius-control" title="Rotate the view around the line of sight, like turning the camera. Snaps to 0 near zero.">
-            Roll
-            <input v-model.number="roll" type="range" min="-180" max="180" step="0.5" :disabled="controlsDisabled">
-            <output>{{ roll.toFixed(1) }}°</output>
-          </label>
-        </fieldset>
-        <fieldset class="control-group two-columns">
-          <legend>Accretion disk</legend>
-          <label class="radius-control" title="How fast the disk rotates. 0 freezes it, and the picture stops redrawing, which saves power.">
-            Speed
-            <input v-model.number="speed" type="range" min="0" max="5" step="0.1" :disabled="controlsDisabled">
-            <output>{{ speed.toFixed(1) }}</output>
-          </label>
-          <label class="radius-control" title="Temperature of the disk at its brightest ring, from about 3,500 K (orange) to 10,000 K (blue-white). Every other part is coloured from this using the disk model, Doppler shift and redshift.">
-            Temperature
-            <input v-model.number="temperature" type="range" min="0" max="1" step="0.01" :disabled="controlsDisabled">
-            <output>{{ Math.round(3500 + 6500 * temperature) }}K</output>
-          </label>
-          <label class="radius-control" title="Exposure of the accretion disk. It changes how bright the disk looks, not its temperature or colour.">
-            Brightness
-            <input v-model.number="brightness" type="range" min="0" max="3" step="0.1" :disabled="controlsDisabled">
-            <output>{{ brightness.toFixed(1) }}</output>
-          </label>
-          <label class="radius-control" title="Inner edge of the disk, in units of GM/c². It cannot go inside the innermost stable orbit, which depends on the spin, so this only moves the edge outwards; the value shown is the edge in use.">
-            R in
-            <input v-model.number="rIn" type="range" :min="R_IN_MIN" max="6" step="0.1" :disabled="controlsDisabled">
-            <output>{{ innerRadius.toFixed(1) }}</output>
-          </label>
-          <label class="radius-control" title="Outer edge of the disk, in units of GM/c². The disk fades out towards this radius.">
-            R out
-            <input v-model.number="rOut" type="range" min="18" max="88" step="1" :disabled="controlsDisabled">
-            <output>{{ Math.round(rOut) }}</output>
-          </label>
-          <label class="radius-control" title="Size of the clumps in the disk texture: higher gives finer, more numerous structure. Rebuilds the texture when released.">
-            Detail
-            <input v-model.number="detail" type="range" min="1" max="12" step="0.5" :disabled="controlsDisabled" @change="rebuildDiskTexture">
-            <output>{{ detail.toFixed(1) }}</output>
-          </label>
-          <label class="radius-control" title="How strongly the clumps stand out from the smooth disk. Rebuilds the texture when released.">
-            Contrast
-            <input v-model.number="contrast" type="range" min="0.5" max="3" step="0.1" :disabled="controlsDisabled" @change="rebuildDiskTexture">
-            <output>{{ contrast.toFixed(1) }}</output>
-          </label>
-        </fieldset>
-        <fieldset class="control-group">
-          <legend>Display</legend>
-          <label class="radius-control" title="Strength of the glow around bright areas. Purely cosmetic; 0 turns it off.">
-            Bloom
-            <input v-model.number="bloom" type="range" min="0" max="2" step="0.05" :disabled="controlsDisabled">
-            <output>{{ bloom.toFixed(2) }}</output>
-          </label>
-          <label title="Draw a thin ring at the true size of the event horizon. The black disc you see is larger: it is the shadow, where light bent by gravity is lost.">
-            <input v-model="showHorizon" type="checkbox" :disabled="controlsDisabled">
-            Show event horizon
-          </label>
-          <label title="Draw a yellow ring with the Sun's true radius (695,700 km) at the same scale. Raise the mass and the Sun shrinks relative to the hole. For a hole of a few solar masses the Sun is larger than the screen.">
-            <input v-model="showSun" type="checkbox" :disabled="controlsDisabled">
-            Show Sun for scale
-          </label>
-          <label title="Draw a violet ring with the Earth's true radius (6,371 km) at the same scale. It is off-screen for small holes and shrinks to a dot above a few hundred thousand solar masses; it is easiest to see between a few hundred and a few hundred thousand.">
-            <input v-model="showEarth" type="checkbox" :disabled="controlsDisabled">
-            Show Earth for scale
-          </label>
-          <label title="Draw a green ring the size of the Solar System out to Neptune's orbit (30 AU, 4.5 billion km radius) at the same scale. It only fits on screen for very massive holes, roughly a billion solar masses or more.">
-            <input v-model="showSolarSystem" type="checkbox" :disabled="controlsDisabled">
-            Show Solar System (Neptune)
-          </label>
-          <div class="button-row">
-            <button type="button" class="reset-button" title="Smoothly return every setting to its default." :disabled="controlsDisabled" @click="resetControls">
-              Reset
-            </button>
-            <span v-if="status" role="status">{{ status }}</span>
-          </div>
-        </fieldset>
-      </div>
-    </section>
-    </Transition>
+        {{ fps }} FPS
+      </UBadge>
+      <UButton
+        color="neutral"
+        variant="subtle"
+        icon="i-lucide-info"
+        aria-label="How this is made"
+        @click="infoOpen = true"
+      />
+    </div>
+
+    <UDrawer
+      :open="!panelHidden"
+      title="Controls"
+      description="Mass, spin, view, accretion disk and display settings. Hover over a control for an explanation."
+      direction="bottom"
+      :modal="false"
+      :overlay="false"
+      :dismissible="false"
+      :handle="false"
+      close
+      :content="{ style: panelColors }"
+      @update:open="panelHidden = !$event"
+    >
+      <template #body>
+        <UTabs :items="controlTabs" variant="link" size="sm" :unmount-on-hide="false">
+          <template #blackhole>
+            <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2">
+              <ControlSlider v-model="massLog" label="Mass (M☉)" hint="Mass of the black hole in solar masses (logarithmic, 1 to 66 billion). The default is about Sagittarius A*. The picture looks the same at any mass, because the physics scales with it; mass sets the real size, shown as the horizon radius." :min="MASS_LOG_MIN" :max="MASS_LOG_MAX" :step="0.02" :display="formatMass(solarMass)" :disabled="controlsDisabled" />
+              <ControlSlider v-model="spin" label="Spin a/M" hint="Spin of the black hole, a/M, from 0 (not rotating) to 0.998 (nearly the maximum). More spin drags space around, shrinks the horizon, moves the disk's inner edge closer and flattens the shadow." :min="0" :max="MAX_SPIN" :step="0.002" :display="spin.toFixed(3)" :disabled="controlsDisabled" />
+              <UTooltip text="Size of the event horizon (the point of no return) for the chosen mass and spin. It shrinks as the spin grows.">
+                <UBadge color="neutral" variant="subtle">Horizon radius {{ formatLength(horizonKm) }}</UBadge>
+              </UTooltip>
+            </div>
+          </template>
+          <template #view>
+            <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2">
+              <ControlSlider v-model="zoom" label="Zoom" hint="Camera distance: how large the hole appears on screen. It does not change the physics. The scroll wheel does the same." :min="0.1" :max="1.5" :step="0.05" :display="`${Math.round(zoom * 100)}%`" :disabled="controlsDisabled" />
+              <ControlSlider v-model="pitch" label="Pitch" hint="Tilt of the disk towards the viewer. 0° sees it edge-on, 89° almost face-on. Dragging up or down changes it." :min="0" :max="89" :step="1" :display="`${Math.round(pitch)}°`" :disabled="controlsDisabled" />
+              <ControlSlider v-model="yaw" label="Yaw" hint="Swing the disk's tilt to the left or right. Dragging sideways changes it." :min="-90" :max="90" :step="1" :display="`${Math.round(yaw)}°`" :disabled="controlsDisabled" />
+              <ControlSlider v-model="roll" label="Roll" hint="Rotate the view around the line of sight, like turning the camera. Snaps to 0 near zero." :min="-180" :max="180" :step="0.5" :display="`${roll.toFixed(1)}°`" :disabled="controlsDisabled" />
+            </div>
+          </template>
+          <template #disk>
+            <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2 lg:grid-cols-4">
+              <ControlSlider v-model="speed" label="Speed" hint="How fast the disk rotates. 0 freezes it, and the picture stops redrawing, which saves power." :min="0" :max="5" :step="0.1" :display="speed.toFixed(1)" :disabled="controlsDisabled" />
+              <ControlSlider v-model="temperature" label="Temperature" hint="Temperature of the disk at its brightest ring, from about 3,500 K (orange) to 10,000 K (blue-white). Every other part is coloured from this using the disk model, Doppler shift and redshift." :min="0" :max="1" :step="0.01" :display="`${Math.round(3500 + 6500 * temperature)}K`" :disabled="controlsDisabled" />
+              <ControlSlider v-model="brightness" label="Brightness" hint="Exposure of the accretion disk. It changes how bright the disk looks, not its temperature or colour." :min="0" :max="3" :step="0.1" :display="brightness.toFixed(1)" :disabled="controlsDisabled" />
+              <ControlSlider v-model="rIn" label="R in" hint="Inner edge of the disk, in units of GM/c². It cannot go inside the innermost stable orbit, which depends on the spin, so this only moves the edge outwards; the value shown is the edge in use." :min="R_IN_MIN" :max="6" :step="0.1" :display="innerRadius.toFixed(1)" :disabled="controlsDisabled" />
+              <ControlSlider v-model="rOut" label="R out" hint="Outer edge of the disk, in units of GM/c². The disk fades out towards this radius." :min="18" :max="88" :step="1" :display="`${Math.round(rOut)}`" :disabled="controlsDisabled" />
+              <ControlSlider v-model="detail" label="Detail" hint="Size of the clumps in the disk texture: higher gives finer, more numerous structure. Rebuilds the texture when released." :min="1" :max="12" :step="0.5" :display="detail.toFixed(1)" :disabled="controlsDisabled" @change="rebuildDiskTexture" />
+              <ControlSlider v-model="contrast" label="Contrast" hint="How strongly the clumps stand out from the smooth disk. Rebuilds the texture when released." :min="0.5" :max="3" :step="0.1" :display="contrast.toFixed(1)" :disabled="controlsDisabled" @change="rebuildDiskTexture" />
+            </div>
+          </template>
+          <template #display>
+            <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2">
+              <ControlSlider v-model="bloom" label="Bloom" hint="Strength of the glow around bright areas. Purely cosmetic; 0 turns it off." :min="0" :max="2" :step="0.05" :display="bloom.toFixed(2)" :disabled="controlsDisabled" />
+              <UTooltip :ui="tipUi" text="Draw a thin ring at the true size of the event horizon. The black disc you see is larger: it is the shadow, where light bent by gravity is lost.">
+                <UCheckbox v-model="showHorizon" label="Show event horizon" :disabled="controlsDisabled" />
+              </UTooltip>
+              <UTooltip :ui="tipUi" text="Draw a yellow ring with the Sun's true radius (695,700 km) at the same scale. Raise the mass and the Sun shrinks relative to the hole. For a hole of a few solar masses the Sun is larger than the screen.">
+                <UCheckbox v-model="showSun" label="Show Sun for scale" :disabled="controlsDisabled" />
+              </UTooltip>
+              <UTooltip :ui="tipUi" text="Draw a violet ring with the Earth's true radius (6,371 km) at the same scale. It is off-screen for small holes and shrinks to a dot above a few hundred thousand solar masses; it is easiest to see between a few hundred and a few hundred thousand.">
+                <UCheckbox v-model="showEarth" label="Show Earth for scale" :disabled="controlsDisabled" />
+              </UTooltip>
+              <UTooltip :ui="tipUi" text="Draw a green ring the size of the Solar System out to Neptune's orbit (30 AU, 4.5 billion km radius) at the same scale. It only fits on screen for very massive holes, roughly a billion solar masses or more.">
+                <UCheckbox v-model="showSolarSystem" label="Show Solar System (Neptune)" :disabled="controlsDisabled" />
+              </UTooltip>
+            </div>
+          </template>
+        </UTabs>
+      </template>
+      <template #footer>
+        <UTooltip text="Smoothly return every setting to its default.">
+          <UButton color="neutral" variant="outline" icon="i-lucide-rotate-ccw" label="Reset" :disabled="controlsDisabled" @click="resetControls" />
+        </UTooltip>
+        <UBadge v-if="status" color="neutral" variant="subtle" role="status">{{ status }}</UBadge>
+      </template>
+    </UDrawer>
+
+    <UDrawer
+      v-model:open="infoOpen"
+      title="How this is made"
+      description="About this render"
+      direction="right"
+      :modal="false"
+      :overlay="false"
+      :handle="false"
+      close
+    >
+      <template #body>
+        <div class="space-y-3 text-sm">
+          <p>
+            Nothing here is a video or a 3D model. Every pixel fires a light ray backwards from the
+            camera and bends it through the curved space around a spinning (Kerr) black hole,
+            following the method of James et al., "Gravitational lensing by spinning black holes in
+            astrophysics, and in the movie Interstellar" (2015). A numerical solver (RK4) integrates
+            the light-ray equations in a WebGL2 shader on your GPU. Spin 0 gives a Schwarzschild hole.
+          </p>
+          <p>
+            Where a ray crosses the accretion disk plane, it picks up the disk's colour and
+            brightness. Rays can cross more than once, which gives the glowing arc that appears
+            over the top and under the hole (the far side of the disk, bent into view).
+          </p>
+          <p>
+            The disk is a thin accretion disk that ends at the innermost stable orbit, which moves
+            inward as the spin grows. Its brightness follows the Novikov-Thorne model: zero at the
+            inner edge, peaking a little outside it, then fading with radius. The local temperature
+            follows from that flux, and each pixel is coloured as a blackbody at the temperature
+            seen after Doppler shift and gravitational redshift (computed for Kerr circular
+            orbits), so the approaching side is hotter and brighter. A procedural noise texture,
+            sheared so the inside orbits faster than the outside, adds the clumpy structure, and a
+            final bloom pass adds the glow.
+          </p>
+          <p>
+            Mass and size: the physics is scale-free, so the picture looks the same for any mass
+            (1 to 66 billion solar masses, the estimated mass of TON 618). The Mass slider only sets
+            the real size. One gravitational radius, GM/c², is 1.48 km per solar mass. The event
+            horizon is two of those for a non-spinning hole and shrinks towards one at maximum spin.
+            The black disc you see is the shadow, about 2.6 times the horizon for a non-spinning
+            hole, because gravity bends light into the hole from beyond it.
+          </p>
+          <p>
+            Scale rings, all drawn at the same scale as the hole: blue is the event horizon, violet
+            the Earth (6,371 km radius), yellow the Sun (695,700 km) and green the orbit of Neptune
+            (30 AU). Each is labelled and hidden when it is off-screen. The Earth and Sun are easiest
+            to see for holes of a few hundred to a few hundred thousand solar masses, and the
+            Neptune ring only fits for roughly a billion solar masses or more.
+          </p>
+          <p>
+            Controls: drag to rotate the view and scroll to zoom. The panel groups the controls into
+            the black hole (mass, spin), the view (zoom, pitch, yaw, roll), the accretion disk (speed,
+            temperature, brightness, edges, texture) and the display (bloom and the scale rings).
+            Hover over any control for an explanation, and Reset eases everything back to the
+            defaults. The counter in the top right shows rendered frames per second.
+          </p>
+          <p>
+            The disk model follows the thin-disk theory reviewed in Abramowicz and Fragile,
+            "Foundations of Black Hole Accretion Disk Theory" (Living Reviews in Relativity, 2013);
+            thicker disk models are not included.
+          </p>
+          <p>
+            Copyright 2026 Paul Rid<template v-if="contact">
+              (<ULink :to="`mailto:${contact}`">{{ contact }}</ULink>)</template>.
+          </p>
+        </div>
+      </template>
+    </UDrawer>
+
     <canvas
       ref="canvas"
-      class="black-hole-canvas"
-      :class="{ dragging }"
+      class="block h-screen w-screen touch-none object-cover"
+      :class="dragging ? 'cursor-grabbing' : 'cursor-grab'"
       @pointerdown="startDrag"
       @pointermove="dragMove"
       @pointerup="endDrag"
@@ -146,83 +184,12 @@
     <div
       v-for="label in ringLabels"
       :key="label.key"
-      class="ring-label"
+      class="pointer-events-none fixed z-10 whitespace-nowrap text-[11px] leading-[14px] select-none [text-shadow:0_0_3px_#000,0_0_3px_#000]"
       :style="{ left: `${label.left}px`, top: `${label.top}px`, color: label.color }"
     >
       {{ label.text }}
     </div>
-    <div v-if="fps !== null" class="fps-counter" aria-label="Frames per second">{{ fps }} FPS</div>
-    <aside class="info-box" :class="{ open: infoOpen }" aria-label="About this render">
-      <button
-        type="button"
-        class="info-toggle"
-        :aria-expanded="infoOpen"
-        :aria-label="infoOpen ? 'Hide information' : 'Show information'"
-        :title="infoOpen ? 'Hide information' : 'How this is made'"
-        @click="infoOpen = !infoOpen"
-      >
-        {{ infoOpen ? '×' : '!' }}
-      </button>
-      <Transition name="panel">
-      <div v-show="infoOpen" class="info-content">
-      <h2>How this is made</h2>
-      <p>
-        Nothing here is a video or a 3D model. Every pixel fires a light ray backwards from the
-        camera and bends it through the curved space around a spinning (Kerr) black hole,
-        following the method of James et al., "Gravitational lensing by spinning black holes in
-        astrophysics, and in the movie Interstellar" (2015). A numerical solver (RK4) integrates
-        the light-ray equations in a WebGL2 shader on your GPU. Spin 0 gives a Schwarzschild hole.
-      </p>
-      <p>
-        Where a ray crosses the accretion disk plane, it picks up the disk's colour and
-        brightness. Rays can cross more than once, which gives the glowing arc that appears
-        over the top and under the hole (the far side of the disk, bent into view).
-      </p>
-      <p>
-        The disk is a thin accretion disk that ends at the innermost stable orbit, which moves
-        inward as the spin grows. Its brightness follows the Novikov-Thorne model: zero at the
-        inner edge, peaking a little outside it, then fading with radius. The local temperature
-        follows from that flux, and each pixel is coloured as a blackbody at the temperature
-        seen after Doppler shift and gravitational redshift (computed for Kerr circular
-        orbits), so the approaching side is hotter and brighter. A procedural noise texture,
-        sheared so the inside orbits faster than the outside, adds the clumpy structure, and a
-        final bloom pass adds the glow.
-      </p>
-      <p>
-        Mass and size: the physics is scale-free, so the picture looks the same for any mass
-        (1 to 66 billion solar masses, the estimated mass of TON 618). The Mass slider only sets
-        the real size. One gravitational radius, GM/c², is 1.48 km per solar mass. The event
-        horizon is two of those for a non-spinning hole and shrinks towards one at maximum spin.
-        The black disc you see is the shadow, about 2.6 times the horizon for a non-spinning
-        hole, because gravity bends light into the hole from beyond it.
-      </p>
-      <p>
-        Scale rings, all drawn at the same scale as the hole: blue is the event horizon, violet
-        the Earth (6,371 km radius), yellow the Sun (695,700 km) and green the orbit of Neptune
-        (30 AU). Each is labelled and hidden when it is off-screen. The Earth and Sun are easiest
-        to see for holes of a few hundred to a few hundred thousand solar masses, and the
-        Neptune ring only fits for roughly a billion solar masses or more.
-      </p>
-      <p>
-        Controls: drag to rotate the view and scroll to zoom. The panel groups the controls into
-        the black hole (mass, spin), the view (zoom, pitch, yaw, roll), the accretion disk (speed,
-        temperature, brightness, edges, texture) and the display (bloom and the scale rings).
-        Hover over any control for an explanation, and Reset eases everything back to the
-        defaults. The counter in the top right shows rendered frames per second.
-      </p>
-      <p>
-        The disk model follows the thin-disk theory reviewed in Abramowicz and Fragile,
-        "Foundations of Black Hole Accretion Disk Theory" (Living Reviews in Relativity, 2013);
-        thicker disk models are not included.
-      </p>
-      <p>
-        Copyright 2026 Paul Rid<template v-if="contact">
-          (<a :href="`mailto:${contact}`">{{ contact }}</a>)</template>.
-      </p>
-      </div>
-      </Transition>
-    </aside>
-  </main>
+  </div>
 </template>
 
 <script setup>
@@ -329,6 +296,14 @@ const rOut = ref(DEFAULTS.rOut)
 const spin = ref(DEFAULTS.spin)
 const panelHidden = ref(true)
 const infoOpen = ref(false)
+const controlTabs = [
+  { label: 'Black hole', icon: 'i-lucide-orbit', slot: 'blackhole' },
+  { label: 'View', icon: 'i-lucide-eye', slot: 'view' },
+  { label: 'Accretion disk', icon: 'i-lucide-disc', slot: 'disk' },
+  { label: 'Display', icon: 'i-lucide-monitor', slot: 'display' },
+]
+// The tooltip hints are long, so let them wrap
+const tipUi = { content: 'h-auto max-w-xs py-1.5', text: 'whitespace-normal' }
 const busy = ref(true)
 const controlsDisabled = ref(true)
 const status = ref('Computing…')
@@ -1486,303 +1461,3 @@ function tick(now) {
   frame = window.requestAnimationFrame(tick)
 }
 </script>
-
-<style>
-:root {
-  color: #e8d6c0;
-  background: #050302;
-  font-family: ui-sans-serif, system-ui, sans-serif;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#__nuxt {
-  width: 100%;
-  min-width: 320px;
-  min-height: 100%;
-  margin: 0;
-  overflow: hidden;
-  background: #050302;
-}
-
-.black-hole-stage {
-  position: relative;
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-  background: #050302;
-}
-
-.black-hole-canvas {
-  display: block;
-  width: 100vw;
-  height: 100vh;
-  object-fit: cover;
-  cursor: grab;
-  touch-action: none;
-}
-
-.black-hole-canvas.dragging {
-  cursor: grabbing;
-}
-
-.control-panel {
-  position: fixed;
-  bottom: 12px;
-  left: 12px;
-  /* leave room on the right for the info button */
-  right: 64px;
-  z-index: 1;
-  padding: 10px 34px 10px 12px;
-  border-radius: 6px;
-  opacity: 0.9;
-  /* The backdrop is blurred and darkened by what is behind the panel, so a bright
-     bloom gets a darker panel than empty space, and the text stays readable. */
-  background: rgba(0, 0, 0, 0.35);
-  -webkit-backdrop-filter: blur(10px) brightness(0.45);
-  backdrop-filter: blur(10px) brightness(0.45);
-  color: var(--panel-ink, #e8d6c0);
-  font: 13px ui-sans-serif, system-ui, sans-serif;
-  user-select: none;
-  accent-color: var(--panel-accent, #ee9648);
-}
-
-.control-groups {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.control-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  margin: 0;
-  padding: 4px 10px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 5px;
-}
-
-/* the disk has the most controls, so its sliders run in two columns to keep the panel low */
-.control-group.two-columns {
-  display: grid;
-  grid-template-columns: repeat(2, auto);
-  gap: 6px 18px;
-}
-
-.control-group legend {
-  padding: 0 4px;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.75;
-}
-
-.control-panel label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
-.control-panel .radius-control {
-  display: grid;
-  grid-template-columns: 78px 110px 48px;
-}
-
-.control-panel .radius-control input {
-  width: 100%;
-  margin: 0;
-}
-
-.control-panel .radius-control output {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.control-panel .mass-readout {
-  opacity: 0.8;
-  font-size: 12px;
-}
-
-.control-panel .button-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.control-panel .reset-button {
-  padding: 3px 10px;
-  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.control-panel .reset-button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.ring-label {
-  position: fixed;
-  z-index: 1;
-  font: 11px/14px ui-sans-serif, system-ui, sans-serif;
-  text-shadow: 0 0 3px #000, 0 0 3px #000;
-  white-space: nowrap;
-  pointer-events: none;
-  user-select: none;
-}
-
-.fps-counter {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  z-index: 1;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #e8d6c0;
-  font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-  user-select: none;
-}
-
-.info-box {
-  position: fixed;
-  right: 12px;
-  bottom: 12px;
-  z-index: 1;
-  color: #e8d6c0;
-  font: 12px/1.45 ui-sans-serif, system-ui, sans-serif;
-}
-
-.info-box.open {
-  z-index: 2;
-}
-
-/* the box itself is the content, so it can fade and slide like the control panel */
-.info-content {
-  max-width: 300px;
-  max-height: calc(100vh - 24px);
-  overflow-y: auto;
-  padding: 8px 12px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.55);
-}
-
-.info-toggle {
-  display: block;
-  padding: 3px 10px;
-  border: 1px solid rgba(232, 214, 192, 0.4);
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #e8d6c0;
-  font: 13px ui-sans-serif, system-ui, sans-serif;
-  cursor: pointer;
-}
-
-.info-box.open .info-toggle {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  line-height: 1;
-}
-
-.info-box h2 {
-  margin: 0 0 4px;
-  padding-right: 24px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.info-box p {
-  margin: 0 0 6px;
-}
-
-.info-box a {
-  color: inherit;
-}
-
-.info-box p:last-child {
-  margin-bottom: 0;
-}
-
-.panel-toggle {
-  border: 1px solid rgba(232, 214, 192, 0.4);
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #e8d6c0;
-  font: 13px ui-sans-serif, system-ui, sans-serif;
-  cursor: pointer;
-}
-
-.panel-toggle.hide-panel {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  line-height: 1;
-  background: transparent;
-}
-
-.panel-toggle.show-panel {
-  position: fixed;
-  bottom: 12px;
-  left: 12px;
-  z-index: 1;
-  padding: 3px 10px;
-}
-
-/* Fade and slide up when shown, back down when hidden */
-.panel-enter-active {
-  transition: opacity 0.35s ease-out, transform 0.35s ease-out;
-}
-
-.panel-leave-active {
-  transition: opacity 0.2s ease-in, transform 0.2s ease-in;
-}
-
-.panel-enter-from,
-.panel-leave-to {
-  opacity: 0;
-  transform: translateY(14px);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .panel-enter-active,
-  .panel-leave-active {
-    transition: opacity 0.2s;
-  }
-
-  .panel-enter-from,
-  .panel-leave-to {
-    transform: none;
-  }
-}
-
-.control-panel.busy,
-.control-panel.busy label {
-  cursor: progress;
-}
-
-.control-panel.busy {
-  opacity: 0.5;
-}
-</style>

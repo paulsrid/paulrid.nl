@@ -5,7 +5,8 @@ const description = 'An interactive real-time black hole simulation built with W
 
 useHead({
   title,
-  htmlAttrs: { lang: 'en' },
+  htmlAttrs: { lang: 'en', class: 'overflow-hidden' },
+  bodyAttrs: { class: 'overflow-hidden' },
   link: [{ rel: 'canonical', href: `${siteUrl}/` }],
   script: [
     {
@@ -63,8 +64,8 @@ useSeoMeta({
 })
 </script>
 <template>
-  <main>
-    <header class="seo-text">
+  <UApp>
+    <header class="sr-only">
       <h1>Interactive black hole simulation</h1>
       <p>
         A real-time, ray-traced simulation of a spinning (Kerr) black hole that runs entirely in
@@ -82,22 +83,11 @@ useSeoMeta({
         spinning black holes in astrophysics, and in the movie Interstellar".
       </p>
     </header>
-    <BlackHole />
+    <main>
+      <BlackHole />
+    </main>
     <noscript>
       <p>This black hole simulation needs JavaScript and a WebGL2 capable browser.</p>
     </noscript>
-  </main>
+  </UApp>
 </template>
-
-<style>
-.seo-text {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-</style>
