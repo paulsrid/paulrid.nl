@@ -46,10 +46,22 @@
           <template #blackhole>
             <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2">
               <ControlSlider v-model="massLog" label="Mass (M☉)" hint="Mass of the black hole in solar masses (logarithmic, 1 to 66 billion). The default is about Sagittarius A*. The picture looks the same at any mass, because the physics scales with it; mass sets the real size, shown as the horizon radius." :min="MASS_LOG_MIN" :max="MASS_LOG_MAX" :step="0.02" :display="formatMass(solarMass)" :disabled="controlsDisabled" />
-              <ControlSlider v-model="spin" label="Spin a/M" hint="Spin of the black hole, a/M, from 0 (not rotating) to 0.998 (nearly the maximum). More spin drags space around, shrinks the horizon, moves the disk's inner edge closer and flattens the shadow." :min="0" :max="MAX_SPIN" :step="0.002" :display="spin.toFixed(3)" :disabled="controlsDisabled" />
+              <ControlSlider v-model="spin" label="Spin a/M" hint="Spin of the black hole, a/M, from 0 (not rotating) to 0.998 (nearly the maximum), or up to 1.5 with Allow spin above 1. More spin drags space around, shrinks the horizon, moves the disk's inner edge closer and flattens the shadow." :min="0" :max="spinMax" :step="0.002" :display="spin.toFixed(3)" :disabled="controlsDisabled" />
               <UTooltip text="Size of the event horizon (the point of no return) for the chosen mass and spin. It shrinks as the spin grows.">
-                <UBadge color="neutral" variant="subtle">Horizon radius {{ formatLength(horizonKm) }}</UBadge>
+                <UBadge color="neutral" variant="subtle">{{ isNaked ? 'No event horizon' : `Horizon radius ${formatLength(horizonKm)}` }}</UBadge>
               </UTooltip>
+              <UTooltip :ui="tipUi" text="Let the Spin slider go past 1, up to 1.5. A real black hole cannot spin faster than a/M = 1; beyond it the horizon disappears and a naked singularity is left. This is an experiment with approximations, not physics: it has no horizon, so light is simply discarded very close in, and the disk keeps the profile of the fastest physical spin.">
+                <UCheckbox v-model="allowNaked" label="Allow spin above 1 (not physical)" :disabled="controlsDisabled" />
+              </UTooltip>
+              <UAlert
+                v-if="isNaked"
+                class="sm:col-span-2"
+                color="warning"
+                variant="subtle"
+                icon="i-lucide-triangle-alert"
+                title="Naked singularity, not physical"
+                description="Above a/M = 1 there is no event horizon. Light is discarded close to the centre and the disk uses the profile of the fastest physical spin, so this picture is an approximation."
+              />
             </div>
           </template>
           <template #view>
@@ -63,6 +75,7 @@
           <template #disk>
             <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2 lg:grid-cols-4">
               <ControlSlider v-model="speed" label="Speed" hint="How fast the disk rotates. 0 freezes it, and the picture stops redrawing, which saves power." :min="0" :max="5" :step="0.1" :display="speed.toFixed(1)" :disabled="controlsDisabled" />
+              <ControlSlider v-model="orbit" label="Orbit velocity" hint="How fast the disk matter really orbits, as a multiple of the physical (Keplerian) speed, which is fixed by the radius and the spin. Above 1 is an exaggeration, capped so no matter outruns light: it strengthens the Doppler shift, the beaming of the approaching side and the time dilation, so the two sides differ more in colour and brightness. At 0 only the gravitational redshift is left. Unlike Speed, this changes the picture, not just the animation." :min="0" :max="2" :step="0.05" :display="`×${orbit.toFixed(2)}`" :disabled="controlsDisabled" />
               <ControlSlider v-model="temperature" label="Temperature" hint="Temperature of the disk at its brightest ring, from about 3,500 K (orange) to 10,000 K (blue-white). Every other part is coloured from this using the disk model, Doppler shift and redshift." :min="0" :max="1" :step="0.01" :display="`${Math.round(3500 + 6500 * temperature)}K`" :disabled="controlsDisabled" />
               <ControlSlider v-model="brightness" label="Brightness" hint="Exposure of the accretion disk. It changes how bright the disk looks, not its temperature or colour." :min="0" :max="3" :step="0.1" :display="brightness.toFixed(1)" :disabled="controlsDisabled" />
               <ControlSlider v-model="rIn" label="R in" hint="Inner edge of the disk, in units of GM/c². It cannot go inside the innermost stable orbit, which depends on the spin, so this only moves the edge outwards; the value shown is the edge in use." :min="R_IN_MIN" :max="6" :step="0.1" :display="innerRadius.toFixed(1)" :disabled="controlsDisabled" />
@@ -92,6 +105,9 @@
                 <USeparator label="Scale rings" />
                 <UTooltip :ui="tipUi" text="Draw a thin ring at the true size of the event horizon. The black disc you see is larger: it is the shadow, where light bent by gravity is lost.">
                   <UCheckbox v-model="showHorizon" label="Show event horizon" :disabled="controlsDisabled" />
+                </UTooltip>
+                <UTooltip :ui="tipUi" text="Draw the circular orbits of light in the equatorial plane, where light can orbit the hole (unstably). For a non-spinning hole this is 3 GM/c², 1.5 times the horizon radius. A spinning hole has two: a smaller one for light moving with the spin and a larger one against it. Like the horizon ring it is drawn at the true coordinate radius; the shadow you see is larger (about 5.2 GM/c²) because it is where light from outside is captured, and the thin bright ring around it is light that has circled near here.">
+                  <UCheckbox v-model="showPhoton" label="Show photon sphere" :disabled="controlsDisabled" />
                 </UTooltip>
                 <UTooltip :ui="tipUi" text="Draw a yellow ring with the Sun's true radius (695,700 km) at the same scale. Raise the mass and the Sun shrinks relative to the hole. For a hole of a few solar masses the Sun is larger than the screen.">
                   <UCheckbox v-model="showSun" label="Show Sun for scale" :disabled="controlsDisabled" />
@@ -147,6 +163,7 @@
       title="How this is made"
       description="About this render"
       direction="right"
+      :ui="{ content: 'w-[28rem]' }"
       :modal="false"
       :overlay="false"
       :handle="false"
@@ -154,60 +171,17 @@
     >
       <template #body>
         <div class="space-y-3 text-sm">
-          <p>
-            Nothing here is a video or a 3D model. Every pixel fires a light ray backwards from the
-            camera and bends it through the curved space around a spinning (Kerr) black hole,
-            following the method of James et al., "Gravitational lensing by spinning black holes in
-            astrophysics, and in the movie Interstellar" (2015). A numerical solver (RK4) integrates
-            the light-ray equations in a WebGL2 shader on your GPU. Spin 0 gives a Schwarzschild hole.
-          </p>
-          <p>
-            Where a ray crosses the accretion disk plane, it picks up the disk's colour and
-            brightness. Rays can cross more than once, which gives the glowing arc that appears
-            over the top and under the hole (the far side of the disk, bent into view).
-          </p>
-          <p>
-            The disk is a thin accretion disk that ends at the innermost stable orbit, which moves
-            inward as the spin grows. Its brightness follows the Novikov-Thorne model: zero at the
-            inner edge, peaking a little outside it, then fading with radius. The local temperature
-            follows from that flux, and each pixel is coloured as a blackbody at the temperature
-            seen after Doppler shift and gravitational redshift (computed for Kerr circular
-            orbits), so the approaching side is hotter and brighter. A procedural noise texture,
-            sheared so the inside orbits faster than the outside, adds the clumpy structure, and a
-            final bloom pass adds the glow.
-          </p>
-          <p>
-            Mass and size: the physics is scale-free, so the picture looks the same for any mass
-            (1 to 66 billion solar masses, the estimated mass of TON 618). The Mass slider only sets
-            the real size. One gravitational radius, GM/c², is 1.48 km per solar mass. The event
-            horizon is two of those for a non-spinning hole and shrinks towards one at maximum spin.
-            The black disc you see is the shadow, about 2.6 times the horizon for a non-spinning
-            hole, because gravity bends light into the hole from beyond it.
-          </p>
-          <p>
-            Scale rings, all drawn at the same scale as the hole: blue is the event horizon, violet
-            the Earth (6,371 km radius), yellow the Sun (695,700 km) and green the orbit of Neptune
-            (30 AU). Each is labelled and hidden when it is off-screen. The Earth and Sun are easiest
-            to see for holes of a few hundred to a few hundred thousand solar masses, and the
-            Neptune ring only fits for roughly a billion solar masses or more.
-          </p>
-          <p>
-            Controls: drag to rotate the view and scroll to zoom. The panel groups the controls into
-            the black hole (mass, spin), the view (zoom, pitch, yaw, roll), the accretion disk (speed,
-            temperature, brightness, edges, texture) and the display (bloom and the scale rings).
-            Hover over any control for an explanation, and Reset eases everything back to the
-            defaults. The counter in the top right shows rendered frames per second.
-          </p>
-          <p>
-            The disk model follows the thin-disk theory reviewed in Abramowicz and Fragile,
-            "Foundations of Black Hole Accretion Disk Theory" (Living Reviews in Relativity, 2013);
-            thicker disk models are not included.
-          </p>
+          <UAccordion :items="infoTopics" type="multiple" :default-value="['0']">
+            <template #body="{ item }">
+              <div class="space-y-2 text-sm text-muted">
+                <p v-for="(paragraph, index) in item.paragraphs" :key="index">{{ paragraph }}</p>
+              </div>
+            </template>
+          </UAccordion>
           <p>
             Copyright 2026 Paul Rid<template v-if="contact">
               (<ULink :to="`mailto:${contact}`">{{ contact }}</ULink>)</template>.
-          </p>
-        </div>
+          </p>        </div>
       </template>
     </UDrawer>
 
@@ -245,6 +219,10 @@ const R_IN_MIN = 1.2
 const R_OUT_MAX = 88
 const MIN_INCL = 0.1
 const MAX_SPIN = 0.998
+// With the opt-in option the slider goes past 1, where there is no event horizon (a naked singularity)
+const NAKED_MAX_SPIN = 1.5
+// Without a horizon rays are given up at this radius instead, in GM/c^2
+const NAKED_CAPTURE_RADIUS = 0.7
 // Geometric units (G = c = M = 1). Rays are captured just outside the horizon,
 // where Boyer-Lindquist coordinates become singular.
 const HORIZON_MARGIN = 0.02
@@ -290,6 +268,7 @@ const canvas = ref(null)
 const DEFAULTS = {
   bloom: 1,
   speed: 1,
+  orbit: 1,
   zoom: 1,
   // log10 of the mass in solar masses; 6.63 is Sagittarius A* (about 4.3 million)
   massLog: 6.63,
@@ -297,6 +276,7 @@ const DEFAULTS = {
   showSun: false,
   showEarth: false,
   showSolarSystem: false,
+  showPhoton: false,
   showGrid: false,
   gridSize: 48,
   gridLines: 8,
@@ -321,12 +301,15 @@ const DEFAULTS = {
 
 const bloom = ref(DEFAULTS.bloom)
 const speed = ref(DEFAULTS.speed)
+const orbit = ref(DEFAULTS.orbit)
 const zoom = ref(DEFAULTS.zoom)
 const massLog = ref(DEFAULTS.massLog)
 const showHorizon = ref(DEFAULTS.showHorizon)
 const showSun = ref(DEFAULTS.showSun)
 const showEarth = ref(DEFAULTS.showEarth)
 const showSolarSystem = ref(DEFAULTS.showSolarSystem)
+const showPhoton = ref(DEFAULTS.showPhoton)
+const allowNaked = ref(false)
 const showGrid = ref(DEFAULTS.showGrid)
 const gridSize = ref(DEFAULTS.gridSize)
 const gridLines = ref(DEFAULTS.gridLines)
@@ -360,6 +343,87 @@ const rOut = ref(DEFAULTS.rOut)
 const spin = ref(DEFAULTS.spin)
 const panelHidden = ref(true)
 const infoOpen = ref(false)
+// The info drawer: one accordion section per topic
+const infoTopics = [
+  {
+    label: 'How this is made',
+    icon: 'i-lucide-cpu',
+    paragraphs: [
+      `Nothing here is a video or a 3D model. Every pixel fires a light ray backwards from the camera and bends it through the curved space around a spinning (Kerr) black hole, following the method of James et al., "Gravitational lensing by spinning black holes in astrophysics, and in the movie Interstellar" (2015). A numerical solver (RK4) integrates the light-ray equations in a WebGL2 shader on your GPU. Spin 0 gives a Schwarzschild hole.`,
+      `Where a ray crosses the accretion disk plane, it picks up the disk's colour and brightness. Rays can cross more than once, which gives the glowing arc that appears over the top and under the hole (the far side of the disk, bent into view). A final bloom pass adds the glow.`,
+    ],
+  },
+  {
+    label: 'The accretion disk',
+    icon: 'i-lucide-disc',
+    paragraphs: [
+      `The disk is a thin accretion disk that ends at the innermost stable orbit, which moves inward as the spin grows. Its brightness follows the Novikov-Thorne model: zero at the inner edge, peaking a little outside it, then fading with radius. The local temperature follows from that flux, and each pixel is coloured as a blackbody at the temperature seen after Doppler shift and gravitational redshift (computed for Kerr circular orbits). A procedural noise texture, sheared so the inside orbits faster than the outside, adds the clumpy structure.`,
+      `Speed only changes how fast that texture turns on screen. The orbital motion that sets the colours and brightness is fixed by the radius and the spin, unless you change Orbit velocity.`,
+    ],
+  },
+  {
+    label: 'Redshift and blueshift',
+    icon: 'i-lucide-rainbow',
+    paragraphs: [
+      `Light from the disk is shifted in frequency by two effects: the Doppler effect of the orbiting matter (a blueshift on the side moving towards you, a redshift on the side moving away) and the gravitational redshift from climbing out of the hole's gravity, which is strongest near the hole. One factor g covers both: g above 1 is a blueshift, below 1 a redshift.`,
+      `The observed temperature scales with g and the observed brightness with g to the fourth power (relativistic beaming), so the approaching side looks hotter and much brighter, and the receding side cooler and dimmer. "Show redshift and blueshift" replaces the temperature colours with the shift itself: blue where g is above 1, red where it is below, white where it is 1.`,
+      `Orbit velocity scales how fast the disk matter really orbits, as a multiple of the physical value. Above 1 is an exaggeration that strengthens the shifts and the beaming, capped so that no matter outruns light. At 0 only the gravitational redshift is left.`,
+    ],
+  },
+  {
+    label: 'Mass and size',
+    icon: 'i-lucide-scale',
+    paragraphs: [
+      `The physics is scale-free, so the picture looks the same for any mass (1 to 66 billion solar masses, the estimated mass of TON 618). The Mass slider only sets the real size. One gravitational radius, GM/c², is 1.48 km per solar mass. The event horizon is two of those for a non-spinning hole and shrinks towards one at maximum spin. The black disc you see is the shadow, about 2.6 times the horizon for a non-spinning hole, because gravity bends light into the hole from beyond it.`,
+    ],
+  },
+  {
+    label: 'Scale rings and the photon sphere',
+    icon: 'i-lucide-circle-dot',
+    paragraphs: [
+      `Scale rings are all drawn at the same scale as the hole: blue is the event horizon, violet the Earth (6,371 km radius), yellow the Sun (695,700 km) and green the orbit of Neptune (30 AU). Each is labelled and hidden when it is off-screen. The Earth and Sun are easiest to see for holes of a few hundred to a few hundred thousand solar masses, and the Neptune ring only fits for roughly a billion solar masses or more.`,
+      `The photon sphere is where light can travel in a circle around the hole, unstably. It is at 3 GM/c² (1.5 times the horizon radius) without spin. A spinning hole has two equatorial orbits, a smaller one for light moving with the spin and a larger one against it, and both are shown. Like the horizon ring they are drawn at the true coordinate radius, inside the shadow. The thin bright ring around the shadow is light that has circled close to this region before escaping.`,
+    ],
+  },
+  {
+    label: 'Spacetime grid',
+    icon: 'i-lucide-grid-3x3',
+    paragraphs: [
+      `The grid is a 3D lattice of lines in the hole's coordinate frame (z is the spin axis), traced through the same curved space as the light, so its lines bend, stretch and wrap around the hole exactly as light does. It shows how light is bent, not an intrinsic measure of curvature.`,
+      `Grid size sets the side length of the cube and Grid lines how many cells it is divided into. The X, Y and Z planes each show one plane through the hole (x = 0, y = 0 and z = 0, which is the disk plane); Full 3D grid repeats them through space.`,
+    ],
+  },
+  {
+    label: 'Rubber sheet',
+    icon: 'i-lucide-funnel',
+    paragraphs: [
+      `The classic picture of a bent sheet is an embedding diagram: the equatorial plane drawn as a surface whose own flat geometry matches the curved space there, so distances along the sheet are the real distances. For a non-spinning hole it is Flamm's paraboloid, z = 2 sqrt(2 (r - 2)); for a spinning hole it is an approximation.`,
+      `It is a diagram drawn over the picture with the same camera, not something a camera would see, and it is not lensed.`,
+    ],
+  },
+  {
+    label: 'Spin above 1 (not physical)',
+    icon: 'i-lucide-triangle-alert',
+    paragraphs: [
+      `A real black hole cannot spin faster than a/M = 1. Beyond that the horizon would disappear, leaving a naked singularity, which the cosmic censorship conjecture says does not occur. "Allow spin above 1" lets the slider go up to 1.5 as an experiment.`,
+      `It is an approximation, not a physical result. The ray tracing still uses the full Kerr geometry, but without a horizon there is nothing to absorb the light, so it is discarded very close to the centre. The disk profile is held at that of the fastest physical spin, the sheet starts where its embedding stops being real, and there is no event horizon ring and no prograde photon orbit. The retrograde photon orbit continues smoothly.`,
+    ],
+  },
+  {
+    label: 'Controls',
+    icon: 'i-lucide-sliders-horizontal',
+    paragraphs: [
+      `Drag to rotate the view and scroll to zoom. The controls drawer groups the settings into tabs: the black hole (mass, spin), the view (zoom, pitch, yaw, roll), the accretion disk (speed, orbit velocity, temperature, brightness, edges, texture) and the display (bloom, redshift colours, scale rings, the rubber sheet and the spacetime grid). Hover over any control for an explanation, and Reset eases everything back to the defaults. The counter in the top right shows rendered frames per second.`,
+    ],
+  },
+  {
+    label: 'Sources',
+    icon: 'i-lucide-book-open',
+    paragraphs: [
+      `Ray tracing: James et al. (2015), as above. Disk model: Novikov and Thorne (1973), in the closed form of Page and Thorne (1974); the thin-disk theory is reviewed in Abramowicz and Fragile, "Foundations of Black Hole Accretion Disk Theory" (Living Reviews in Relativity, 2013). Thicker disk models are not included. Innermost stable and photon orbits: Bardeen, Press and Teukolsky (1972).`,
+    ],
+  },
+]
 const controlTabs = [
   { label: 'Black hole', icon: 'i-lucide-orbit', slot: 'blackhole' },
   { label: 'View', icon: 'i-lucide-eye', slot: 'view' },
@@ -425,17 +489,34 @@ const panelColors = computed(() => ({
   '--panel-ink': stopColor(STOPS[4].slice(1), BLUE_STOPS[4].slice(1)),
 }))
 
-watch([bloom, speed, temperature, brightness, showHorizon, showSun, showEarth, showSolarSystem, massLog], () => {
+watch([bloom, speed, temperature, brightness, showHorizon, showSun, showEarth, showSolarSystem, showPhoton, massLog], () => {
   dirty = true
 })
 
 // The render is scale-free (G = c = M = 1), so mass does not change the picture;
 // it only sets the physical size. The horizon is at r+ = M (1 + sqrt(1 - a^2)).
-const horizonRadius = computed(() => 1 + Math.sqrt(1 - spin.value * spin.value))
+// A hole with spin above 1 has no horizon, so its radius is 0 (nothing to draw)
+const isNaked = computed(() => spin.value > 1)
+const spinMax = computed(() => (allowNaked.value ? NAKED_MAX_SPIN : MAX_SPIN))
+watch(allowNaked, (allowed) => {
+  if (!allowed && spin.value > MAX_SPIN) spin.value = MAX_SPIN
+})
+const horizonRadius = computed(() => (isNaked.value ? 0 : 1 + Math.sqrt(1 - spin.value * spin.value)))
 // The Sun's radius in units of M, so it shares the render's scale
 const sunRadius = computed(() => SOLAR_RADIUS_KM / (KM_PER_SOLAR_MASS * solarMass.value))
 const earthRadius = computed(() => EARTH_RADIUS_KM / (KM_PER_SOLAR_MASS * solarMass.value))
 const solarSystemRadius = computed(() => NEPTUNE_ORBIT_KM / (KM_PER_SOLAR_MASS * solarMass.value))
+// Circular equatorial photon orbits of a Kerr hole (Bardeen, Press & Teukolsky 1972):
+// r = 2 M (1 + cos(2/3 arccos(-+ a))), prograde first. Both are 3 M without spin.
+// Above a = 1 there is no prograde orbit, and the retrograde one continues with cosh and arcosh.
+const photonRadius = (a) => {
+  if (a > 1) return 2 * (1 + Math.cosh(2 / 3 * Math.acosh(a)))
+  if (a < -1) return 0
+  return 2 * (1 + Math.cos(2 / 3 * Math.acos(a)))
+}
+const photonPrograde =computed(() => photonRadius(-spin.value))
+const photonRetrograde = computed(() => photonRadius(spin.value))
+const photonLabel = (kind, radiusM) => `Photon ${kind}, ${radiusM.toFixed(2)} GM/c² (${formatLength(radiusM * KM_PER_SOLAR_MASS * solarMass.value)})`
 const horizonKm = computed(() => horizonRadius.value * KM_PER_SOLAR_MASS * solarMass.value)
 
 // Labels for the scale rings are HTML over the canvas. The canvas is stretched
@@ -452,7 +533,10 @@ const ringLabels = computed(() => {
   const offsetY = (height - HEIGHT * scale) / 2
   const pxPerM = BASE_SHADOW_PX * zoom.value / 5.196
   const rings = [
-    [showHorizon.value, 'horizon', `Event horizon, ${formatLength(horizonKm.value)} radius`, horizonRadius.value, '#73d9ff'],
+    [showHorizon.value && horizonRadius.value > 0, 'horizon', `Event horizon, ${formatLength(horizonKm.value)} radius`, horizonRadius.value, '#73d9ff'],
+    [showPhoton.value && spin.value <= 0.01, 'photon', photonLabel('sphere', photonPrograde.value), photonPrograde.value, '#ff7359'],
+    [showPhoton.value && spin.value > 0.01 && photonPrograde.value > 0, 'photon', photonLabel('orbit, prograde', photonPrograde.value), photonPrograde.value, '#ff7359'],
+    [showPhoton.value && spin.value > 0.01, 'photon-retro', photonLabel('orbit, retrograde', photonRetrograde.value), photonRetrograde.value, '#ff7359'],
     [showEarth.value, 'earth', 'Earth, 6,371 km radius', earthRadius.value, '#cc99ff'],
     [showSun.value, 'sun', 'Sun, 695,700 km radius', sunRadius.value, '#ffd926'],
     [showSolarSystem.value, 'neptune', 'Neptune’s orbit, 30 AU radius', solarSystemRadius.value, '#66ff80'],
@@ -502,7 +586,9 @@ const iscoRadius = (a) => {
   const z2 = Math.sqrt(3 * a * a + z1 * z1)
   return 3 + z2 - Math.sqrt((3 - z1) * (3 + z1 + 2 * z2))
 }
-const innerRadius = computed(() => Math.max(rIn.value, iscoRadius(spin.value)))
+// The disk model (inner edge, flux profile) only exists for a < 1, so above that it holds the largest physical spin
+const diskSpin = computed(() => Math.min(spin.value, MAX_SPIN))
+const innerRadius = computed(() => Math.max(rIn.value, iscoRadius(diskSpin.value)))
 
 // Novikov-Thorne flux (Page & Thorne 1974), mirrored from the trace shader so the
 // peak over the visible disk can be found and the shader flux scaled to 1 there.
@@ -537,7 +623,7 @@ watch([showSheet, sheetSize, showShift], () => {
   dirty = true
 })
 
-watch([rIn, rOut, roll, pitch, yaw, spin, showGrid, gridSize, gridLines, showGridX, showGridY, showGridZ, showGridStack], () => {
+watch([rIn, rOut, roll, pitch, yaw, spin, orbit, showGrid, gridSize, gridLines, showGridX, showGridY, showGridZ, showGridStack], () => {
   needsTrace = true
   dirty = true
 })
@@ -592,6 +678,8 @@ uniform float uRIn;
 uniform float uROut;
 uniform float uIncl;
 uniform float uSpin;
+// Spin used for the disk's flux profile: uSpin, held to the physical range
+uniform float uFluxSpin;
 uniform float uCapture;
 // Spacetime grid: lattice spacing in GM/c^2 (0 = off), half the cube's size and line width in the same units
 uniform float uGridSpacing;
@@ -604,6 +692,8 @@ uniform float uGridWidth;
 // Page & Thorne roots (sqrt(r_isco), x1, x2, x3) and 1 / peak flux, see novikovThorneFlux
 uniform vec4 uRoots;
 uniform float uFluxNorm;
+// Orbital velocity as a multiple of the Keplerian one
+uniform float uOrbit;
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
 layout(location = 2) out vec4 o2;
@@ -656,7 +746,7 @@ float rootTerm(float xi, float xj, float xk, float x, float a) {
 // closed form of Page & Thorne 1974, x = sqrt(r)). It vanishes at the innermost
 // stable orbit and falls as r^-3 far out; uFluxNorm scales the peak to 1.
 float novikovThorneFlux(float radius) {
-  float a = max(uSpin, 0.001);
+  float a = max(uFluxSpin, 0.001);
   float x0 = uRoots.x;
   float x = max(sqrt(radius), x0 * 1.0001);
   float bracket = x - x0 - 1.5 * a * log(x / x0)
@@ -680,9 +770,21 @@ void record(float radius, float angle) {
 
   float flux = novikovThorneFlux(radius) * uFluxNorm;
   float r15 = radius * sqrt(radius);
-  float root = max(r15 - 3.0 * sqrt(radius) + 2.0 * uSpin, 0.05);
-  float timeDilation = (r15 + uSpin) / (sqrt(r15) * sqrt(root));
-  float omega = 1.0 / (r15 + uSpin);
+  // uOrbit scales the orbital angular velocity (1 is the Keplerian value). The time
+  // dilation u^t = 1 / sqrt(-g_tt - 2 g_tphi W - g_phiphi W^2) of the equatorial Kerr metric
+  // equals the closed form for circular orbits at 1, and stays valid for other speeds.
+  float omegaKepler = 1.0 / (r15 + uSpin);
+  float omega = uOrbit * omegaKepler;
+  float gPhiPhi = radius * radius + uSpin * uSpin + 2.0 * uSpin * uSpin / radius;
+  if (uOrbit > 1.0) {
+    // matter cannot go faster than light: stop just short of u^t^-2 = 0.02, never below Keplerian
+    float limit = (4.0 * uSpin / radius
+      + sqrt(max(16.0 * uSpin * uSpin / (radius * radius) + 4.0 * gPhiPhi * (1.0 - 2.0 / radius - 0.02), 0.0)))
+      / (2.0 * gPhiPhi);
+    omega = min(omega, max(omegaKepler, limit));
+  }
+  float radicand = 1.0 - 2.0 / radius + 4.0 * uSpin * omega / radius - gPhiPhi * omega * omega;
+  float timeDilation = inversesqrt(max(radicand, 0.02));
   float redshift = clamp(1.0 / (timeDilation * (1.0 - omega * gL)), 0.05, 2.0);
   float textureAngle = angle;
   textureAngle -= TAU * floor((textureAngle + PI) / TAU);
@@ -1011,6 +1113,8 @@ uniform sampler2D uScene;
 uniform float uBloom;
 uniform float uShadowPx;
 uniform float uHorizonPx;
+uniform float uPhotonPx;
+uniform float uPhotonRetroPx;
 uniform float uSunPx;
 uniform float uEarthPx;
 uniform float uSolarSystemPx;
@@ -1070,6 +1174,16 @@ void main() {
     // 1px ring at the event horizon's coordinate radius (1 M = one unit of screen scale)
     float ring = abs(length(pixelCoord() - vec2(CX, CY)) - uHorizonPx);
     color = mix(color, vec3(0.45, 0.85, 1.0), clamp(1.0 - ring, 0.0, 1.0));
+  }
+  if (uPhotonPx > 0.0) {
+    // 1px ring at the equatorial photon orbit (prograde when the hole spins)
+    float ring = abs(length(pixelCoord() - vec2(CX, CY)) - uPhotonPx);
+    color = mix(color, vec3(1.0, 0.45, 0.35), clamp(1.0 - ring, 0.0, 1.0));
+  }
+  if (uPhotonRetroPx > 0.0) {
+    // the retrograde orbit of a spinning hole, a little fainter
+    float ring = abs(length(pixelCoord() - vec2(CX, CY)) - uPhotonRetroPx);
+    color = mix(color, vec3(1.0, 0.45, 0.35), 0.7 * clamp(1.0 - ring, 0.0, 1.0));
   }
   if (uSunPx > 0.0) {
     // 1px yellow ring at the Sun's true radius, same scale as the horizon ring
@@ -1235,7 +1349,7 @@ function wheelZoom(event) {
 // disk texture, so they jump at the end instead of animating.
 const RESET_MS = 800
 const RESET_KEYS = {
-  bloom, speed, zoom, massLog, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin,
+  bloom, speed, orbit, zoom, massLog, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin,
 }
 let resetFrame = 0
 let resetting = false
@@ -1251,6 +1365,7 @@ function resetControls() {
   showSun.value = DEFAULTS.showSun
   showEarth.value = DEFAULTS.showEarth
   showSolarSystem.value = DEFAULTS.showSolarSystem
+  showPhoton.value = DEFAULTS.showPhoton
   showGrid.value = DEFAULTS.showGrid
   gridSize.value = DEFAULTS.gridSize
   gridLines.value = DEFAULTS.gridLines
@@ -1534,12 +1649,14 @@ function traceRays() {
   gl.uniform1f(traceProgram.uniforms.uRIn, innerRadius.value)
   gl.uniform1f(traceProgram.uniforms.uROut, rOut.value)
   gl.uniform1f(traceProgram.uniforms.uSpin, spin.value)
-  const fluxSpin = Math.max(spin.value, 0.001)
+  gl.uniform1f(traceProgram.uniforms.uOrbit, orbit.value)
+  const fluxSpin = Math.max(diskSpin.value, 0.001)
+  gl.uniform1f(traceProgram.uniforms.uFluxSpin, fluxSpin)
   const roots = fluxRoots(fluxSpin)
   gl.uniform4f(traceProgram.uniforms.uRoots, ...roots)
   gl.uniform1f(traceProgram.uniforms.uFluxNorm, 1 / (peakDiskFlux(fluxSpin, roots) || 1))
-  const horizon = 1 + Math.sqrt(1 - spin.value * spin.value)
-  gl.uniform1f(traceProgram.uniforms.uCapture, 1 / (horizon + HORIZON_MARGIN))
+  const captureRadius = isNaked.value ? NAKED_CAPTURE_RADIUS : horizonRadius.value + HORIZON_MARGIN
+  gl.uniform1f(traceProgram.uniforms.uCapture, 1 / captureRadius)
   // the cube keeps its size when lines are added: the spacing is the size over the number of cells
   gl.uniform1f(traceProgram.uniforms.uGridSpacing, showGrid.value ? gridSize.value / gridLines.value : 0)
   gl.uniform1f(traceProgram.uniforms.uGridExtent, gridSize.value / 2)
@@ -1624,6 +1741,8 @@ function compositeScene() {
   gl.uniform1f(uniforms.uBloom, bloom.value)
   gl.uniform1f(uniforms.uShadowPx, shadowPx)
   gl.uniform1f(uniforms.uHorizonPx, showHorizon.value ? horizonRadius.value * unit : 0)
+  gl.uniform1f(uniforms.uPhotonPx, showPhoton.value && photonPrograde.value > 0 ? photonPrograde.value * unit : 0)
+  gl.uniform1f(uniforms.uPhotonRetroPx, showPhoton.value && spin.value > 0.01 ? photonRetrograde.value * unit : 0)
   gl.uniform1f(uniforms.uSunPx, showSun.value ? sunRadius.value * unit : 0)
   gl.uniform1f(uniforms.uEarthPx, showEarth.value ? earthRadius.value * unit : 0)
   gl.uniform1f(uniforms.uSolarSystemPx, showSolarSystem.value ? solarSystemRadius.value * unit : 0)
@@ -1645,13 +1764,17 @@ const SHEET_PROFILE = 400
 
 function buildSheet() {
   const a = spin.value
-  const root = Math.sqrt(1 - a * a)
-  const rPlus = 1 + root
+  const naked = a > 1
+  const root = naked ? 0 : Math.sqrt(1 - a * a)
+  // without a horizon the embedding starts where 2 r = a^2 (zero slope), not at r+
+  const rPlus = naked ? a * a / 2 : 1 + root
   const rMinus = 1 - root
   const extent = sheetSize.value
   const tMax = Math.sqrt(extent - rPlus)
   const slope = (t) => {
     const r = rPlus + t * t
+    // (2 r - a^2) = 2 t^2 for the naked case, which keeps the slope finite at t = 0
+    if (naked) return 2 * Math.SQRT2 * t * t / Math.sqrt(r * r - 2 * r + a * a)
     return 2 * Math.sqrt((2 * r - a * a) / (r - rMinus))
   }
   const profile = new Float64Array(SHEET_PROFILE + 1)
