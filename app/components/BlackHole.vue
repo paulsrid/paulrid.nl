@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div>
     <UButton
       v-if="panelHidden"
@@ -47,6 +47,11 @@
             <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2">
               <ControlSlider v-model="massLog" label="Mass (M☉)" hint="Mass of the black hole in solar masses (logarithmic, 1 to 66 billion). The default is about Sagittarius A*. The picture looks the same at any mass, because the physics scales with it; mass sets the real size, shown as the horizon radius." :min="MASS_LOG_MIN" :max="MASS_LOG_MAX" :step="0.02" :display="formatMass(solarMass)" :disabled="controlsDisabled" />
               <ControlSlider v-model="spin" label="Spin a/M" hint="Spin of the black hole, a/M, from 0 (not rotating) to 0.998 (nearly the maximum), or up to 1.5 with Allow spin above 1. More spin drags space around, shrinks the horizon, moves the disk's inner edge closer and flattens the shadow." :min="0" :max="spinMax" :step="0.002" :display="spin.toFixed(3)" :disabled="controlsDisabled" />
+              <ControlSlider v-model="accretionLog" label="Accretion rate" hint="How fast matter falls into the hole, as a share of the Eddington rate: the rate at which the radiation it gives off would push back as hard as gravity pulls in. It is not the mass of the disk. Relativistic jets switch on when it drops below about 2% of the Eddington rate, and need a fast spin; at higher rates the disk is thin and the jets are suppressed. Logarithmic, from 0.1% to 100%." :min="-3" :max="0" :step="0.05" :display="formatRate(accretionRate)" :disabled="controlsDisabled" />
+              <UTooltip :ui="tipUi" text="Draw the relativistic jets: beams of plasma launched along the spin axis, up and down. The one pointing towards you is Doppler beamed, so it looks much brighter and bluer than the one pointing away. They only show when the accretion rate is low enough (below about 2% of Eddington) and the spin is high. They are drawn with the same bent light rays as the rest, so the far jet is lensed too.">
+                <UCheckbox v-model="showJets" label="Show relativistic jets" :disabled="controlsDisabled" />
+              </UTooltip>
+              <UBadge class="sm:col-span-2" color="neutral" variant="subtle" role="status">{{ jetStatus }}</UBadge>
               <UTooltip text="Size of the event horizon (the point of no return) for the chosen mass and spin. It shrinks as the spin grows.">
                 <UBadge color="neutral" variant="subtle">{{ isNaked ? 'No event horizon' : `Horizon radius ${formatLength(horizonKm)}` }}</UBadge>
               </UTooltip>
@@ -80,14 +85,25 @@
               <ControlSlider v-model="brightness" label="Brightness" hint="Exposure of the accretion disk. It changes how bright the disk looks, not its temperature or colour." :min="0" :max="3" :step="0.1" :display="brightness.toFixed(1)" :disabled="controlsDisabled" />
               <ControlSlider v-model="rIn" label="R in" hint="Inner edge of the disk, in units of GM/c². It cannot go inside the innermost stable orbit, which depends on the spin, so this only moves the edge outwards; the value shown is the edge in use." :min="R_IN_MIN" :max="6" :step="0.1" :display="innerRadius.toFixed(1)" :disabled="controlsDisabled" />
               <ControlSlider v-model="rOut" label="R out" hint="Outer edge of the disk, in units of GM/c². The disk fades out towards this radius." :min="18" :max="88" :step="1" :display="`${Math.round(rOut)}`" :disabled="controlsDisabled" />
-              <ControlSlider v-model="detail" label="Detail" hint="Size of the clumps in the disk texture: higher gives finer, more numerous structure. Rebuilds the texture when released." :min="1" :max="12" :step="0.5" :display="detail.toFixed(1)" :disabled="controlsDisabled" @change="rebuildDiskTexture" />
-              <ControlSlider v-model="contrast" label="Contrast" hint="How strongly the clumps stand out from the smooth disk. Rebuilds the texture when released." :min="0.5" :max="3" :step="0.1" :display="contrast.toFixed(1)" :disabled="controlsDisabled" @change="rebuildDiskTexture" />
+              <ControlSlider v-model="detail" label="Detail" hint="Size of the clumps in the disk texture: higher gives finer, more numerous structure. Rebuilds the thin disk's texture when released; the volumetric gas follows it live." :min="1" :max="12" :step="0.5" :display="detail.toFixed(1)" :disabled="controlsDisabled" @change="rebuildDiskTexture" />
+              <ControlSlider v-model="contrast" label="Contrast" hint="How strongly the clumps stand out from the smooth disk. Rebuilds the thin disk's texture when released; the volumetric gas follows it live." :min="0.5" :max="3" :step="0.1" :display="contrast.toFixed(1)" :disabled="controlsDisabled" @change="rebuildDiskTexture" />
+              <UTooltip :ui="tipUi" text="Draw the disk as a volume of glowing, absorbing gas and dust with real thickness, instead of a thin sheet. The light is followed through the gas along its bent path, so you can see through thin gas, dense lanes block the light behind them, and the far side of the disk shows over and under the hole. It costs much more to draw and redraws every frame; turn it off for the thin disk.">
+                <UCheckbox v-model="volumetric" label="Volumetric gas and dust" :disabled="controlsDisabled" />
+              </UTooltip>
+              <ControlSlider v-model="thickness" label="Thickness" hint="Height of the gas above and below the disk plane, as a fraction of the distance from the hole. The disk flares: it is thicker further out. The total amount of gas does not change, so a thicker disk is more diffuse." :min="0.01" :max="0.35" :step="0.01" :display="`${Math.round(thickness * 100)}%`" :disabled="controlsDisabled || !volumetric" />
+              <ControlSlider v-model="density" label="Density" hint="How much gas there is, which is how opaque the volume is. Low values let you see through to the far side; high values make it a dense, dark-laned cloud that only shows its surface." :min="0.2" :max="4" :step="0.1" :display="density.toFixed(1)" :disabled="controlsDisabled || !volumetric" />
+              <ControlSlider v-model="quality" label="Volume quality" hint="Resolution of the gas, as a share of the picture. Lower is faster and softer. Rebuilds the target when released." :min="0.25" :max="1" :step="0.05" :display="`${Math.round(quality * 100)}%`" :disabled="controlsDisabled || !volumetric" @change="resizeVolume" />
             </div>
           </template>
           <template #display>
             <div class="grid gap-x-8 gap-y-4 pt-3 md:grid-cols-2 xl:grid-cols-4">
               <div class="space-y-3">
                 <USeparator label="Colour and glow" />
+                <UTooltip :ui="tipUi" text="Draw a field of stars far behind the hole. Each pixel's light ray ends up pointing at some part of the sky once gravity has bent it, so the stars show the lensing: they are stretched into arcs and a ring around the shadow, and the hole itself shows none, since that light fell in. Dense gas in front hides them. The stars are made up, and the field of view is a choice; the bending is the real one.">
+                  <UCheckbox v-model="showStars" label="Show starfield" :disabled="controlsDisabled || !starsAvailable" />
+                </UTooltip>
+                <ControlSlider v-model="starAmount" label="Star amount" hint="How many stars there are, from none to the full field. Turning it down thins the stars out without changing how bright the rest are." :min="0" :max="1" :step="0.02" :display="`${Math.round(starAmount * 100)}%`" :disabled="controlsDisabled || !showStars || !starsAvailable" />
+                <ControlSlider v-model="starBrightness" label="Star brightness" hint="How bright the stars are. Bloom makes the brighter ones glow." :min="0.2" :max="3" :step="0.1" :display="starBrightness.toFixed(1)" :disabled="controlsDisabled || !showStars || !starsAvailable" />
                 <ControlSlider v-model="bloom" label="Bloom" hint="Strength of the glow around bright areas. Purely cosmetic; 0 turns it off." :min="0" :max="2" :step="0.05" :display="bloom.toFixed(2)" :disabled="controlsDisabled" />
                 <UTooltip :ui="tipUi" text="Colour the disk by how much its light is shifted in frequency, instead of by temperature. Red is redshifted (g below 1): matter moving away from you, or deep in the gravitational well. Blue is blueshifted (g above 1): matter moving towards you. White is unshifted. Brightness still includes the relativistic beaming, so the approaching side is bright and blue, the receding side dim and red.">
                   <UCheckbox v-model="showShift" label="Show redshift and blueshift" :disabled="controlsDisabled" />
@@ -229,6 +245,23 @@ const HORIZON_MARGIN = 0.02
 const BASE_SHADOW_PX = 122 / 736 * WIDTH
 const CX = WIDTH / 2
 const CY = HEIGHT / 2
+// Relativistic jets along the spin axis. They reach JET_LENGTH from the hole and start JET_BASE above
+// it (in GM/c^2); the plasma moves at JET_BETA of the speed of light, its light is a blue-white
+// of JET_TEMPERATURE kelvin before the Doppler shift, JET_BRIGHTNESS scales how bright it is, and
+// the knots in it move outward at JET_SPEED GM/c^2 per second.
+const JET_LENGTH = 80
+const JET_BETA = 0.92
+const JET_BASE = 1.5
+const JET_BRIGHTNESS = 2.5
+const JET_TEMPERATURE = 20000
+const JET_SPEED = 6
+// Jets switch on when the accretion rate falls below this share of the Eddington rate, and are
+// gone above twice it
+const JET_THRESHOLD = 0.02
+// The starfield's vertical field of view in radians, and the size of a star (a Gaussian's sigma in
+// radians) which is about a pixel wide at that field of view
+const STAR_FOV = 1.2
+const STAR_SIGMA = STAR_FOV / HEIGHT * 0.9
 const ROLL_SNAP = 2
 const MAX_INCL = 89 * Math.PI / 180
 const SPIN_RATE = 0.5
@@ -297,6 +330,18 @@ const DEFAULTS = {
   rIn: R_IN_MIN,
   rOut: 36,
   spin: 0.9,
+  showStars: false,
+  starBrightness: .4,
+  starAmount: .04,
+  showJets: false,
+  // log10 of the accretion rate as a share of the Eddington rate
+  accretionLog: -2,
+  volumetric: false,
+  // gas scale height as a fraction of the radius
+  thickness: 0.03,
+  density: 1,
+  // render scale of the volume pass
+  quality: 0.5,
 }
 
 const bloom = ref(DEFAULTS.bloom)
@@ -341,6 +386,39 @@ const contrast = ref(DEFAULTS.contrast)
 const rIn = ref(DEFAULTS.rIn)
 const rOut = ref(DEFAULTS.rOut)
 const spin = ref(DEFAULTS.spin)
+const showStars = ref(DEFAULTS.showStars)
+const starBrightness = ref(DEFAULTS.starBrightness)
+const starAmount = ref(DEFAULTS.starAmount)
+// Needs a fifth render target; set false at start-up if the GPU has fewer
+const starsAvailable = ref(true)
+const volumetric = ref(DEFAULTS.volumetric)
+const showJets = ref(DEFAULTS.showJets)
+// log10 of the accretion rate as a share of the Eddington rate (-2 is 1%)
+const accretionLog = ref(DEFAULTS.accretionLog)
+const accretionRate = computed(() => 10 ** accretionLog.value)
+// How strong the jets are, 0 to 1. They need the accretion rate to be below JET_THRESHOLD of the
+// Eddington rate (they fade out between that and twice it), and a hole that spins fast: the power
+// drawn from the spin grows as its square (Blandford-Znajek), so a slow spin gives a weak jet.
+const jetStrength = computed(() => {
+  if (!showJets.value) return 0
+  const fade = clamp((accretionRate.value - JET_THRESHOLD) / JET_THRESHOLD, 0, 1)
+  const gate = 1 - fade * fade * (3 - 2 * fade)
+  return gate * clamp(spin.value ** 2 / 0.8, 0, 1)
+})
+// What the jets are doing, for the badge next to the accretion rate
+const jetStatus = computed(() => {
+  if (!showJets.value) return 'Jets are hidden'
+  if (accretionRate.value >= 2 * JET_THRESHOLD) return `Jets off: the rate is above ${Math.round(200 * JET_THRESHOLD)}% of Eddington`
+  if (jetStrength.value <= 0.02) return 'Jets off: the hole spins too slowly'
+  if (accretionRate.value > JET_THRESHOLD) return 'Jets fading: the rate is above the 2% threshold'
+  return jetStrength.value < 0.95 ? 'Jets on, weak: slow spin' : 'Jets on'
+})
+const formatRate = (rate) => `${(rate * 100).toFixed(rate < 0.1 ? 2 : 1)}% of Eddington`
+// the volume pass draws the gas, the jets, or both
+const volumeNeeded = computed(() => volumetric.value || jetStrength.value > 0)
+const thickness = ref(DEFAULTS.thickness)
+const density = ref(DEFAULTS.density)
+const quality = ref(DEFAULTS.quality)
 const panelHidden = ref(true)
 const infoOpen = ref(false)
 // The info drawer: one accordion section per topic
@@ -350,15 +428,41 @@ const infoTopics = [
     icon: 'i-lucide-cpu',
     paragraphs: [
       `Nothing here is a video or a 3D model. Every pixel fires a light ray backwards from the camera and bends it through the curved space around a spinning (Kerr) black hole, following the method of James et al., "Gravitational lensing by spinning black holes in astrophysics, and in the movie Interstellar" (2015). A numerical solver (RK4) integrates the light-ray equations in a WebGL2 shader on your GPU. Spin 0 gives a Schwarzschild hole.`,
-      `Where a ray crosses the accretion disk plane, it picks up the disk's colour and brightness. Rays can cross more than once, which gives the glowing arc that appears over the top and under the hole (the far side of the disk, bent into view). A final bloom pass adds the glow.`,
+      `The rays are traced once and kept until the view changes. By default the disk is a thin sheet, and a ray picks up its colour and brightness where it crosses the disk plane, up to three times, which gives the glowing arc that appears over the top and under the hole (the far side of the disk, bent into view). With the volumetric gas or the jets switched on, a second pass follows each ray through that material instead, and runs every frame, because it moves. The trace also records where each ray ends up in the sky, for the starfield. A final bloom pass adds the glow.`,
     ],
   },
   {
     label: 'The accretion disk',
     icon: 'i-lucide-disc',
     paragraphs: [
-      `The disk is a thin accretion disk that ends at the innermost stable orbit, which moves inward as the spin grows. Its brightness follows the Novikov-Thorne model: zero at the inner edge, peaking a little outside it, then fading with radius. The local temperature follows from that flux, and each pixel is coloured as a blackbody at the temperature seen after Doppler shift and gravitational redshift (computed for Kerr circular orbits). A procedural noise texture, sheared so the inside orbits faster than the outside, adds the clumpy structure.`,
-      `Speed only changes how fast that texture turns on screen. The orbital motion that sets the colours and brightness is fixed by the radius and the spin, unless you change Orbit velocity.`,
+      `The disk is a thin accretion disk that ends at the innermost stable orbit, which moves inward as the spin grows. Its brightness follows the Novikov-Thorne model: zero at the inner edge, peaking a little outside it, then fading with radius. The local temperature follows from that flux, and each pixel is coloured as a blackbody at the temperature seen after Doppler shift and gravitational redshift (computed for Kerr circular orbits). Procedural noise, sheared so the inside orbits faster than the outside, adds the clumpy structure.`,
+      `Speed only changes how fast that noise turns on screen. The orbital motion that sets the colours and brightness is fixed by the radius and the spin, unless you change Orbit velocity.`,
+    ],
+  },
+  {
+    label: 'Volumetric gas and dust',
+    icon: 'i-lucide-cloud',
+    paragraphs: [
+      `With Volumetric gas and dust switched on (it is off by default) the disk is a layer of gas and dust with real thickness, and not a flat sheet. The volume pass follows each light ray along its bent path and, at every step through the gas, adds the light the gas gives off and removes the light its dust absorbs. Dense lanes therefore darken what lies behind them, thin gas lets the far side show through, and the layer is thicker the further out it is (it flares). The gas thins out smoothly above and below the disk plane, in a Gaussian profile.`,
+      `The gas keeps the thin disk's physics: the same Novikov-Thorne brightness profile, Doppler shift and gravitational redshift, evaluated at the distance from the spin axis. Its clumps come from a tiling 3D noise texture, looked up in a way that stretches them along the orbit; the differential rotation then shears and turns them, as for the thin disk. Thickness is the height of the gas as a fraction of the radius (3% by default), and Density sets how opaque it is. Changing the thickness does not change the total amount of gas, so a thicker disk is more diffuse. Volume quality is the resolution of the gas as a share of the picture; lower it if the frame rate drops, raise it for sharper detail.`,
+      `This is a simple emission and absorption model, with the temperature taken from the disk's midplane profile. It is not a simulation of a real disk's vertical structure, and it has no scattering. Turn the option off to go back to the thin disk, which is much cheaper to draw. Detail and Contrast then change the gas live, and rebuild the thin disk's texture when released.`,
+    ],
+  },
+  {
+    label: 'Relativistic jets',
+    icon: 'i-lucide-arrow-up-down',
+    paragraphs: [
+      `Some black holes launch jets of plasma from their poles at more than 90% of the speed of light. The material never crosses the horizon: it is flung out from the region just outside it. Spinning twists space around the hole (frame dragging) and with it the magnetic field of the hot plasma in the disk, which is wound tight along the spin axis; this stores energy that is released as the jet. The Blandford-Znajek mechanism describes how this takes energy from the hole's own rotation, so the jet's power grows with the square of the spin.`,
+      `A jet needs three things: a fast spin, a disk to feed the hole, and a low accretion rate. Jets reliably switch on when the rate falls to about 2% of the Eddington rate, the rate at which the radiation pushed out by the infalling matter would balance gravity's pull. This is a share of an accretion rate that scales with the hole's mass, and not a mass of the disk. At lower rates the inner disk puffs up into a hot, thick flow that can carry the magnetic field; at higher rates the disk is thin and the jets are suppressed. After a star is torn apart the jet appears only once the rate has dropped, hundreds or thousands of days later.`,
+      `Here the Accretion rate slider sets that share. The jets are fully on below 2% and fade out between 2% and 4%, and they also fade as the spin drops towards zero. They are drawn with the same bent light rays as the rest of the picture, so the jet pointing away from you is lensed over and around the hole, and they show with the thin disk as well as the gas. Show relativistic jets turns them off, which saves the cost of drawing them. Each is a narrow, nearly straight beam up and down the spin axis, with a bright core in a fainter sheath, that widens slowly and fades with height, with a faint ripple that drifts outward. The plasma moves at 0.92 of the speed of light, so its light is Doppler beamed: the jet pointing towards you is brighter and bluer, and the one pointing away is dimmer and redder. The effect is softened so that jets seen from the side stay visible, and seen from nearly along the axis the jet pointing at you is very bright. The shape, brightness and ripple are made up for the picture; the disk does not puff up as the rate falls, and the threshold and the dependence on spin are simple rules and not a simulation of the magnetic fields.`,
+    ],
+  },
+  {
+    label: 'The starfield',
+    icon: 'i-lucide-sparkles',
+    paragraphs: [
+      `Each light ray is followed until it escapes, and the direction it ends up pointing in is the part of the sky that pixel sees. The stars are drawn at that direction, so the sky is lensed exactly as the light is: the stars near the hole are stretched into arcs, there is a ring of them around the shadow, and the shadow itself shows none, because that light fell into the hole. Gas in front of the stars hides them. Show starfield turns the stars on (they are off by default), Star amount thins them out and Star brightness sets how bright they are.`,
+      `The stars are procedural and made up, not a real catalogue. The bending is real, but the field of view is a choice: because the camera is at infinity, all its rays are parallel, so each pixel's own viewing direction is added to the bent direction to spread the stars across the picture. The field is fixed in the hole's frame, so the stars move as you turn the view. It needs a GPU with five render targets, and is switched off without them.`,
     ],
   },
   {
@@ -421,7 +525,7 @@ const infoTopics = [
     label: 'Controls',
     icon: 'i-lucide-sliders-horizontal',
     paragraphs: [
-      `Drag to rotate the view and scroll to zoom. The controls drawer groups the settings into tabs: the black hole (mass, spin, and the option to allow spin above 1), the view (zoom, pitch, yaw, roll), the accretion disk (speed, orbit velocity, temperature, brightness, inner and outer edge, texture detail and contrast) and the display (bloom, redshift colours, the scale rings and photon sphere, the rubber sheet and the spacetime grid). Hover over any control for an explanation, and Reset eases everything back to the defaults. The counter in the top right shows rendered frames per second.`,
+      `Drag to rotate the view and scroll to zoom. The controls drawer groups the settings into tabs: the black hole (mass, spin, the accretion rate that decides whether jets appear, the jets themselves, and the option to allow spin above 1), the view (zoom, pitch, yaw, roll), the accretion disk (speed, orbit velocity, temperature, brightness, inner and outer edge, texture detail and contrast, and the volumetric gas with its thickness, density and quality) and the display (bloom, the starfield with its amount and brightness, redshift colours, the scale rings and photon sphere, the rubber sheet and the spacetime grid). Hover over any control for an explanation, and Reset eases everything back to the defaults. The counter in the top right shows rendered frames per second.`,
     ],
   },
   {
@@ -454,6 +558,11 @@ let gl
 let vao
 let diskTexture
 let builtTexture
+let volumeProgram
+let volumeTarget
+let noiseTexture
+let profileTexture
+let profileKey = ''
 let traceTextures = []
 let traceFramebuffer
 let sceneTexture
@@ -631,6 +740,18 @@ watch([showSheet, sheetSize, showShift], () => {
   dirty = true
 })
 
+// The volume pass runs every frame, so these only need a redraw. Turning the volume on or off
+// changes what the trace records (the thin disk's crossings), and the thin disk's texture is
+// only rebuilt while it is not in use, so it is brought up to date when it comes back.
+watch([thickness, density, detail, contrast, showStars, starBrightness, starAmount, showJets, accretionLog], () => {
+  dirty = true
+})
+watch(volumetric, (on) => {
+  needsTrace = true
+  dirty = true
+  if (!on) rebuildDiskTexture()
+})
+
 watch([rIn, rOut, roll, pitch, yaw, spin, orbit, showGrid, gridSize, gridLines, showGridX, showGridY, showGridZ, showGridStack], () => {
   needsTrace = true
   dirty = true
@@ -702,10 +823,23 @@ uniform vec4 uRoots;
 uniform float uFluxNorm;
 // Orbital velocity as a multiple of the Keplerian one
 uniform float uOrbit;
+// 1 draws the thin disk (crossings of the equatorial plane), 0 leaves it to the volume pass
+uniform float uThin;
+#ifdef VOLUME
+layout(location = 0) out vec4 o0;
+#else
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
 layout(location = 2) out vec4 o2;
 layout(location = 3) out vec4 o3;
+#ifdef STARS
+// Where in the sky the ray ends up (direction xyz, 1 if it escaped)
+layout(location = 4) out vec4 o4;
+#endif
+#endif
+// Radians of sky per unit of screen coordinate, see skyDirection
+uniform float uStarFov;
+vec4 gSky = vec4(0.0);
 
 float gData[16];
 int gCount = 0;
@@ -831,6 +965,170 @@ vec3 angularAccel(vec3 n, vec3 v) {
   return -dot(v, v) * n + uSpin * uSpin * mu * (vec3(0.0, 0.0, 1.0) - mu * n);
 }
 
+#ifdef VOLUME
+precision highp sampler3D;
+// Tileable 3D noise (one tile is NOISE_PERIOD wide) and the disk profile per radius:
+// x flux (peak 1), y orbital angular velocity, z time dilation
+uniform sampler3D uNoise;
+uniform sampler2D uProfile;
+// uOutInv: 1 over the radius out to which anything is drawn (the gas, or the jets if they reach further)
+uniform float uOutInv;
+uniform float uGasOutInv;
+uniform float uInInv;
+uniform float uZCut;
+// 1 if the gas is drawn, and the jets' strength (0 for none) and the phase of their knots in M
+uniform float uGas;
+uniform float uJet;
+uniform float uJetPhase;
+uniform float uThick;
+uniform float uDensity;
+uniform float uContrast;
+uniform float uNoiseScale;
+uniform float uAzimuthCycles;
+uniform float uPhaseA;
+uniform float uPhaseB;
+uniform float uMixA;
+uniform float uPeakTemp;
+uniform float uVolScale;
+
+// Light, light-weighted temperature (K) and shift, and what is left of the ray after the gas
+float gVolLight = 0.0;
+float gVolTemp = 0.0;
+float gVolShift = 0.0;
+float gVolT = 1.0;
+
+vec3 volumePoint(float u, vec3 n, float extra) {
+  float cs = cos(extra);
+  float sn = sin(extra);
+  return vec3(n.x * cs - n.y * sn, n.x * sn + n.y * cs, n.z) / max(u, 1e-4);
+}
+
+// Gas density falls off as a Gaussian above the plane, with a scale height of uThick times the
+// radius (a flared disk) and clumps from the noise, which the disk's differential rotation shears
+// like the thin disk's texture. Each sample both emits (the disk's flux, Doppler and redshift
+// as before) and absorbs, so dense lanes dim what lies behind them.
+void volumeGas(vec3 pos, float dl) {
+  float radius = length(pos.xy);
+  float edge = smoothstep(uRIn, uRIn + 0.7, radius)
+    * (1.0 - smoothstep(uROut * 0.35, uROut, radius));
+  float scaleHeight = uThick * radius;
+  float vertical = exp(-0.5 * pos.z * pos.z / (scaleHeight * scaleHeight));
+  if (edge * vertical < 0.003) return;
+
+  // The noise is looked up in cylindrical coordinates (radius, azimuth, height), with a whole
+  // number of tiles around, so the clumps are stretched along the orbit; the skew in azimuth keeps
+  // the tiles that repeat along the radius from lining up.
+  float gas = 0.0;
+  float shear = uRIn / radius;
+  float azimuth = atan(pos.y, pos.x);
+  for (int layer = 0; layer < 2; layer += 1) {
+    float weight = layer == 0 ? uMixA : 1.0 - uMixA;
+    if (weight < 0.003) continue;
+    float angle = azimuth - shear * (layer == 0 ? uPhaseA : uPhaseB);
+    vec3 q = vec3(radius * uNoiseScale, angle * uAzimuthCycles / TAU + 0.618 * radius * uNoiseScale, pos.z * uNoiseScale);
+    // a finer copy (a whole number of times as dense, so it still tiles) adds the small strands
+    float coarse = textureLod(uNoise, q, 0.0).r;
+    float fine = textureLod(uNoise, q * 3.0 + vec3(0.37, 0.11, 0.53), 0.0).r;
+    gas += weight * (0.65 * coarse + 0.35 * fine);
+  }
+  float clumps = clamp(gas * 1.8, 0.0, 1.4);
+
+  float at = clamp((radius - TEX_MIN) / TEX_STEP, 0.0, TEXTURE_RADII - 1.001);
+  int i0 = int(at);
+  vec4 profile = mix(texelFetch(uProfile, ivec2(i0, 0), 0), texelFetch(uProfile, ivec2(i0 + 1, 0), 0), fract(at));
+  float shift = clamp(1.0 / (profile.z * (1.0 - profile.y * gL)), 0.05, 2.0);
+
+  // the factor 0.3 sets a vertical optical depth of about 1 at the default density, whatever the thickness
+  float tau = 0.3 * uDensity * edge * vertical * (0.2 + 1.6 * min(clumps, 1.0)) / scaleHeight * dl;
+  float absorbed = 1.0 - exp(-tau);
+  float shift2 = shift * shift;
+  float light = gVolT * absorbed * profile.x * shift2 * shift2 * (0.12 + 1.5 * pow(clumps, uContrast));
+  gVolLight += light;
+  gVolTemp += light * uPeakTemp * shift * sqrt(sqrt(profile.x));
+  gVolShift += light * clamp(log2(shift), -1.0, 1.0);
+  gVolT *= 1.0 - absorbed;
+}
+
+// A relativistic jet along the spin axis, up and down: a narrow beam of plasma that widens slowly
+// with height, a bright core in a fainter sheath, fading in above the hole and out at its end, and
+// a faint ripple in its brightness that drifts outward. The plasma moves away from the hole at JET_BETA of the speed of light, so its
+// light is Doppler beamed: with delta = 1 / (gamma (1 - beta cos)), where cos is the angle between the
+// jet's velocity and the direction the light travels to the observer, the part pointing at the
+// observer is much brighter and bluer and the part pointing away much dimmer, as seen in real jets.
+// The plasma is thin, so it adds light but does not absorb.
+const float JET_LENGTH = ${f(JET_LENGTH)};
+const float JET_BETA = ${f(JET_BETA)};
+const float JET_BASE = ${f(JET_BASE)};
+// Radius of the beam at a height above the hole: a narrow, nearly straight cone (about 1.3 degrees)
+float jetWidth(float height) {
+  return 0.25 + 0.022 * height;
+}
+
+void volumeJet(vec3 pos, float dl, vec3 toward) {
+  float height = abs(pos.z);
+  float width = jetWidth(height);
+  float x = length(pos.xy) / width;
+  // a bright, narrow core inside a fainter sheath, fading in above the hole and out at the end
+  float beam = (exp(-4.0 * x * x) + 0.2 * exp(-0.8 * x * x))
+    * smoothstep(JET_BASE, JET_BASE + 1.5, height)
+    * (1.0 - smoothstep(0.6 * JET_LENGTH, JET_LENGTH, height));
+  // the same power through a wider beam is spread thinner
+  float thin = 0.25 / width;
+  float amount = beam * pow(thin, 1.5);
+  if (amount < 0.002) return;
+
+  // a faint, long ripple in the brightness along the beam, drifting outward, so that the stream
+  // looks alive but steady
+  vec3 q = vec3(pos.xy * 0.15, (height - uJetPhase) / 20.0);
+  float ripple = clamp((textureLod(uNoise, q, 0.0).r - 0.3) / 0.45, 0.0, 1.0);
+  float knots = 0.85 + 0.3 * ripple;
+
+  float cosine = toward.z * sign(pos.z);
+  float gamma = 1.0 / sqrt(1.0 - JET_BETA * JET_BETA);
+  float doppler = 1.0 / (gamma * (1.0 - JET_BETA * cosine));
+  float well = sqrt(max(1.0 - 2.0 / length(pos), 0.05));
+  float shift = doppler * well;
+  float light = gVolT * uJet * ${f(JET_BRIGHTNESS)} * amount * knots
+    * (0.6 + 0.4 * min(shift * shift, 6.0)) * dl;
+  gVolLight += light;
+  gVolTemp += light * clamp(${f(JET_TEMPERATURE)} * shift, 3000.0, 40000.0);
+  gVolShift += light * clamp(log2(shift), -1.0, 1.0);
+}
+
+// One integration step of the ray, from (u, n, extra) to the next state, in the hole's frame
+void volumeStep(float u, vec3 n, float extra, float nextU, vec3 nextN, float nextExtra) {
+  vec3 from = volumePoint(u, n, extra);
+  vec3 to = volumePoint(nextU, nextN, nextExtra);
+  float span = distance(from, to);
+  // the light travels towards the observer, against the direction the ray is followed in
+  vec3 toward = (from - to) / max(span, 1e-5);
+  // the steps far out are long, so they are cut into pieces
+  int count = int(clamp(ceil(span / 0.4), 1.0, 8.0));
+  float piece = span / float(count);
+  for (int j = 0; j < 8; j += 1) {
+    if (j >= count) break;
+    vec3 at = mix(from, to, (float(j) + 0.5) / float(count));
+    if (uGas > 0.5) volumeGas(at, piece);
+    if (uJet > 0.0) volumeJet(at, piece, toward);
+  }
+}
+#endif
+
+#ifdef STARS
+// The observer is at infinity, so all rays are parallel and, without the hole, would end in one
+// and the same direction. To give the picture a field of view, the direction each pixel looks in
+// is added to the direction the (bent) ray ends in. The deflection is the real one; the field
+// of view is a choice. Screen right is the y axis and up is (-cos, 0, sin) of the inclination.
+vec4 skyDirection(vec3 n, float extra, vec2 screen, float cosObs, float sinObs) {
+  float cs = cos(extra);
+  float sn = sin(extra);
+  vec3 ended = vec3(n.x * cs - n.y * sn, n.x * sn + n.y * cs, n.z);
+  vec3 right = vec3(0.0, 1.0, 0.0);
+  vec3 up = vec3(-cosObs, 0.0, sinObs);
+  return vec4(normalize(ended + (screen.x * right + screen.y * up) * uStarFov), 1.0);
+}
+#endif
+
 void traceRay(vec2 screen, float cosObs, float sinObs) {
   float alpha = screen.x;
   float beta = screen.y;
@@ -900,7 +1198,8 @@ void traceRay(vec2 screen, float cosObs, float sinObs) {
     nextV = normalize(nextV) * sqrt(max(speed2, 1e-6));
     float nextExtra = extra + h / 6.0 * (e1 + 2.0 * e2 + 2.0 * e3 + e4);
 
-    if (n.z * nextN.z < 0.0) {
+#ifndef VOLUME
+    if (uThin > 0.5 && n.z * nextN.z < 0.0) {
       float fraction = n.z / (n.z - nextN.z);
       float crossingU = u + fraction * (nextU - u);
       if (crossingU > 0.0) {
@@ -912,6 +1211,7 @@ void traceRay(vec2 screen, float cosObs, float sinObs) {
         }
       }
     }
+#endif
 
     if (uGridSpacing > 0.0) {
       if (nextU > gridMinU) {
@@ -926,8 +1226,30 @@ void traceRay(vec2 screen, float cosObs, float sinObs) {
       }
     }
 
-    if (nextU >= uCapture) return;    if (nextU <= 0.0) {
+#ifdef VOLUME
+    // only the wedge around the disk plane, between the inner and outer edge, holds gas, and the
+    // jets are in a narrow cone round the spin axis
+    bool inGas = uGas > 0.5 && nextU > uGasOutInv && nextU < uInInv && abs(nextN.z) < uZCut;
+    bool inJet = false;
+    if (uJet > 0.0 && nextU > uOutInv) {
+      float r = 1.0 / nextU;
+      float h = r * abs(nextN.z);
+      inJet = h > JET_BASE && r * sqrt(max(1.0 - nextN.z * nextN.z, 0.0)) < 3.5 * jetWidth(h);
+    }
+    if (inGas || inJet) {
+      volumeStep(u, n, extra, nextU, nextN, nextExtra);
+      if (gVolT < 0.01) return;
+    }
+    // a ray that is past the outer edge and moving away does not come back
+    if (nextU < uOutInv && nextU < u) return;
+#endif
+
+    if (nextU >= uCapture) return;
+    if (nextU <= 0.0) {
       gData[15] = nearCount;
+#ifdef STARS
+      gSky = skyDirection(nextN, nextExtra, screen, cosObs, sinObs);
+#endif
       return;
     }
     if (nextU > 0.25) nearCount += 1.0;
@@ -940,6 +1262,15 @@ void traceRay(vec2 screen, float cosObs, float sinObs) {
 }
 
 
+#ifdef VOLUME
+// The target is smaller than the picture by uVolScale, so a pixel here stands for a block of picture pixels.
+// The temperature and shift are stored multiplied by the light, so that filtering between pixels stays correct.
+void main() {
+  vec2 pix = vec2(gl_FragCoord.x / uVolScale - 0.5, H - 0.5 - gl_FragCoord.y / uVolScale);
+  traceRay(rayCoord(pix, uUnit), cos(uIncl), sin(uIncl));
+  o0 = vec4(gVolLight, gVolTemp * 0.001, gVolShift, 1.0 - gVolT);
+}
+#else
 void main() {
   for (int i = 0; i < 16; i += 1) gData[i] = 0.0;
   traceRay(rayCoord(pixelCoord(), uUnit), cos(uIncl), sin(uIncl));
@@ -949,9 +1280,20 @@ void main() {
   o1 = vec4(gData[4], gData[5], gData[6], gData[7]);
   o2 = vec4(gData[8], gData[9], gData[10], gData[11]);
   o3 = vec4(gData[12], gData[13], gData[14], gData[15]);
+#ifdef STARS
+  o4 = gSky;
+#endif
 }
+#endif
 `
 
+const withDefine = (source, name) => source.replace('#version 300 es\n', `#version 300 es\n#define ${name}\n`)
+// The same ray integrator, but it marches through a volume of gas around the disk plane
+// instead of recording crossings of the plane
+const VOLUME_SOURCE = withDefine(TRACE_SOURCE, 'VOLUME')
+// The trace that also records where each ray ends up in the sky, for the starfield. It needs a
+// fifth render target, which not every GPU has.
+const TRACE_STARS_SOURCE = withDefine(TRACE_SOURCE, 'STARS')
 
 const SHADE_SOURCE = `${SHADER_HEAD}
 const float STOP_T[6] = float[6](${STOPS.map(stop => f(stop[0])).join(', ')});
@@ -971,6 +1313,16 @@ uniform float uTemperature;
 uniform float uBrightness;
 uniform float uPeakTemp;
 uniform float uShift;
+// The volume pass result: light, temperature and shift (both times the light), and opacity
+uniform sampler2D uVolume;
+uniform float uVolumetric;
+// 1 if the volume pass was drawn (the gas is on, or the jets are); uVolumetric is the gas alone
+uniform float uVolumeOn;
+// Where each ray ends in the sky (see the trace shader) and the star brightness, 0 for no stars
+uniform sampler2D uTrace4;
+uniform float uStars;
+// Share of the star cells that hold a star, 0 to 1
+uniform float uStarAmount;
 out vec4 outColor;
 
 // Blackbody colour (Tanner Helland's fit to the Planckian locus, 1000-40000 K),
@@ -1009,6 +1361,58 @@ float wrapDelta(float delta) {
   return delta - TAU * floor(delta / TAU + 0.5);
 }
 
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+
+vec3 hash33(vec3 p) {
+  p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+  p += dot(p, p.yxz + 33.33);
+  return fract((p.xxy + p.yxx) * p.zyx);
+}
+
+// One layer of stars on the sky: the direction is projected onto a cube face and the face is cut
+// into square cells, each with at most one star, kept away from the cell's edge so that only
+// the pixel's own cell needs looking at. A star is a small Gaussian. Lensing keeps surface
+// brightness, so a star stretched into an arc stays as bright; where the pixel covers more sky
+// than the star (footprint) the star is spread out and fainter instead of aliasing.
+vec3 starLayer(vec3 d, float cells, float density, float footprint, float seed) {
+  vec3 a = abs(d);
+  vec2 uv;
+  float face;
+  if (a.x >= a.y && a.x >= a.z) {
+    uv = d.yz / a.x;
+    face = d.x > 0.0 ? 0.0 : 1.0;
+  } else if (a.y >= a.z) {
+    uv = d.zx / a.y;
+    face = d.y > 0.0 ? 2.0 : 3.0;
+  } else {
+    uv = d.xy / a.z;
+    face = d.z > 0.0 ? 4.0 : 5.0;
+  }
+  vec2 p = uv * cells;
+  vec2 id = floor(p);
+  vec3 h = hash33(vec3(id, face + seed));
+  if (h.x > density) return vec3(0.0);
+  vec2 center = id + 0.2 + 0.6 * h.yz;
+  // roughly the angle on the sky per unit of the (gnomonic) face coordinates
+  float skew = pow(1.0 + dot(uv, uv), 0.75);
+  float angle = length(p - center) / (cells * skew);
+  float sigma = clamp(max(footprint, ${f(STAR_SIGMA)}), ${f(STAR_SIGMA)}, 0.2 / (cells * skew));
+  float spread = ${f(STAR_SIGMA)} / sigma;
+  float magnitude = hash13(vec3(id, face + seed + 3.7));
+  vec3 tint = mix(vec3(0.65, 0.78, 1.0), vec3(1.0, 0.82, 0.62), hash13(vec3(id, face + seed + 7.1)));
+  return tint * (0.15 + 2.0 * magnitude * magnitude * magnitude) * spread * spread * exp(-0.5 * angle * angle / (sigma * sigma));
+}
+
+vec3 starField(vec3 d, float footprint) {
+  return starLayer(d, 22.0, 0.5 * uStarAmount, footprint, 0.0)
+    + starLayer(d, 55.0, 0.4 * uStarAmount, footprint, 11.0)
+    + starLayer(d, 140.0, 0.3 * uStarAmount, footprint, 23.0);
+}
+
 void main() {
   ivec2 ip = ivec2(gl_FragCoord.xy);
   ivec2 maxP = ivec2(int(W) - 1, int(H) - 1);
@@ -1021,7 +1425,17 @@ void main() {
 
   vec3 diskLight = vec3(0.0);
   float transmittance = 1.0;
+  // the volume pass holds the gas, the jets or both; the thin disk's crossings are added below
+  if (uVolumeOn > 0.5) {
+    vec4 volume = texture(uVolume, gl_FragCoord.xy / vec2(W, H));
+    if (uVolumetric > 0.5) transmittance = 1.0 - volume.a;
+    float lit = max(volume.r, 1e-6);
+    float shiftLog = volume.b / lit;
+    vec3 shiftColor = mix(vec3(1.0), shiftLog > 0.0 ? vec3(0.25, 0.55, 1.0) : vec3(1.0, 0.2, 0.1), abs(shiftLog));
+    diskLight = volume.r * mix(blackbody(volume.g / lit * 1000.0), shiftColor, uShift);
+  }
   for (int i = 0; i < ${MAX_CROSSINGS}; i += 1) {
+    if (uVolumetric > 0.5) break;
     int k = i * 5;
     float packed = g[k + 4];
     if (packed <= 0.0) continue;
@@ -1081,7 +1495,21 @@ void main() {
 
   vec3 disk = 1.0 - exp(-diskLight * uBrightness * vignette * mix(1.0, 0.4, uShift) * ${f(DISK_EXPOSURE)});
   vec3 gridLight = vec3(0.3, 0.62, 1.0) * grid * 0.55;
-  outColor = vec4(min(palette(added * vignette) + disk + gridLight, vec3(1.0)), 1.0);
+  // the stars behind the hole, seen through whatever gas is in front of them
+  vec3 stars = vec3(0.0);
+  if (uStars > 0.0) {
+    vec4 sky = texelFetch(uTrace4, ip, 0);
+    if (sky.w > 0.5) {
+      vec4 skyX = texelFetch(uTrace4, min(ip + ivec2(1, 0), maxP), 0);
+      vec4 skyY = texelFetch(uTrace4, min(ip + ivec2(0, 1), maxP), 0);
+      float footprint = 0.0;
+      if (skyX.w > 0.5) footprint = max(footprint, distance(skyX.xyz, sky.xyz));
+      if (skyY.w > 0.5) footprint = max(footprint, distance(skyY.xyz, sky.xyz));
+      // squared, so that the disk hides the stars behind it more than its opacity alone would
+      stars = uStars * transmittance * transmittance * starField(sky.xyz, footprint);
+    }
+  }
+  outColor = vec4(min(palette(added * vignette) + disk + gridLight + stars, vec3(1.0)), 1.0);
 }
 `
 
@@ -1354,10 +1782,10 @@ function wheelZoom(event) {
 }
 
 // Reset eases every value back to its default. Detail and contrast rebuild the
-// disk texture, so they jump at the end instead of animating.
+// disk texture, and the volume quality its target, so they jump at the end instead of animating.
 const RESET_MS = 800
 const RESET_KEYS = {
-  bloom, speed, orbit, zoom, massLog, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin,
+  bloom, speed, orbit, zoom, massLog, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin, thickness, density, starBrightness, starAmount, accretionLog,
 }
 let resetFrame = 0
 let resetting = false
@@ -1384,6 +1812,9 @@ function resetControls() {
   showSheet.value = DEFAULTS.showSheet
   showShift.value = DEFAULTS.showShift
   sheetSize.value = DEFAULTS.sheetSize
+  volumetric.value = DEFAULTS.volumetric
+  showStars.value = DEFAULTS.showStars
+  showJets.value = DEFAULTS.showJets
   const from = Object.fromEntries(Object.entries(RESET_KEYS).map(([key, control]) => [key, control.value]))
   const fromX = centerX
   const fromY = centerY
@@ -1406,6 +1837,8 @@ function resetControls() {
     resetting = false
     detail.value = DEFAULTS.detail
     contrast.value = DEFAULTS.contrast
+    quality.value = DEFAULTS.quality
+    resizeVolume()
     rebuildDiskTexture()
   }
   resetFrame = window.requestAnimationFrame(step)
@@ -1502,6 +1935,118 @@ function buildDiskTexture(detail, contrast) {
   return data
 }
 
+// Tileable 3D value noise for the volumetric gas: fractal noise from lattices of 4, 8, 16 and 32
+// cells across one tile, wrapped so the tile repeats without a seam. One tile is NOISE_PERIOD
+// wide along the radius and the height, in units of GM/c^2 (the Detail slider rescales it), so
+// the coarsest cells are 3 M at the default detail and the finest 0.4 M. The value is stored as a byte.
+const NOISE_SIZE = 128
+const NOISE_CELLS = [4, 8, 16, 32]
+const NOISE_PERIOD = 12
+
+function buildNoiseVolume() {
+  const octaves = NOISE_CELLS.map((cells, index) => {
+    const lattice = new Float32Array(cells ** 3)
+    for (let i = 0; i < lattice.length; i += 1) {
+      lattice[i] = hash(i % cells, Math.floor(i / cells) % cells, Math.floor(i / (cells * cells)) + index * 97)
+    }
+    const first = new Uint16Array(NOISE_SIZE)
+    const second = new Uint16Array(NOISE_SIZE)
+    const weight = new Float32Array(NOISE_SIZE)
+    for (let i = 0; i < NOISE_SIZE; i += 1) {
+      const position = i * cells / NOISE_SIZE
+      const cell = Math.floor(position)
+      const fraction = position - cell
+      first[i] = cell
+      second[i] = (cell + 1) % cells
+      weight[i] = fraction * fraction * (3 - 2 * fraction)
+    }
+    return { cells, lattice, first, second, weight, amplitude: 0.5 ** (index + 1) }
+  })
+  const total = octaves.reduce((sum, octave) => sum + octave.amplitude, 0)
+  const data = new Uint8Array(NOISE_SIZE ** 3)
+  let at = 0
+  for (let k = 0; k < NOISE_SIZE; k += 1) {
+    for (let j = 0; j < NOISE_SIZE; j += 1) {
+      for (let i = 0; i < NOISE_SIZE; i += 1) {
+        let sum = 0
+        for (const { cells, lattice, first, second, weight, amplitude } of octaves) {
+          const row = cells
+          const plane = cells * cells
+          const x0 = first[i]
+          const x1 = second[i]
+          const y0 = first[j] * row
+          const y1 = second[j] * row
+          const z0 = first[k] * plane
+          const z1 = second[k] * plane
+          const wx = weight[i]
+          const wy = weight[j]
+          const wz = weight[k]
+          const low0 = lattice[z0 + y0 + x0] + (lattice[z0 + y0 + x1] - lattice[z0 + y0 + x0]) * wx
+          const low1 = lattice[z0 + y1 + x0] + (lattice[z0 + y1 + x1] - lattice[z0 + y1 + x0]) * wx
+          const high0 = lattice[z1 + y0 + x0] + (lattice[z1 + y0 + x1] - lattice[z1 + y0 + x0]) * wx
+          const high1 = lattice[z1 + y1 + x0] + (lattice[z1 + y1 + x1] - lattice[z1 + y1 + x0]) * wx
+          const low = low0 + (low1 - low0) * wy
+          const high = high0 + (high1 - high0) * wy
+          sum += amplitude * (low + (high - low) * wz)
+        }
+        data[at] = Math.round(255 * clamp(sum / total, 0, 1))
+        at += 1
+      }
+    }
+  }
+  return data
+}
+
+function createNoiseTexture() {
+  const texture = gl.createTexture()
+  gl.bindTexture(gl.TEXTURE_3D, texture)
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, NOISE_SIZE, NOISE_SIZE, NOISE_SIZE, 0, gl.RED, gl.UNSIGNED_BYTE, buildNoiseVolume())
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT)
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT)
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT)
+  return texture
+}
+
+// What the volume pass needs per radius, so the shader does not evaluate the disk model per
+// sample: the Novikov-Thorne flux (peak 1, as in the trace shader), and the orbital angular
+// velocity and time dilation, which with a photon's angular momentum give the Doppler and
+// gravitational shift. The same orbit physics as `record` in the trace shader.
+function buildDiskProfile() {
+  const a = spin.value
+  const fluxSpin = Math.max(diskSpin.value, 0.001)
+  const roots = fluxRoots(fluxSpin)
+  const norm = 1 / (peakDiskFlux(fluxSpin, roots) || 1)
+  const data = new Float32Array(TEXTURE_RADII * 4)
+  for (let i = 0; i < TEXTURE_RADII; i += 1) {
+    const radius = TEX_MIN + i * TEX_STEP
+    const keplerian = 1 / (radius * Math.sqrt(radius) + a)
+    const phiPhi = radius * radius + a * a + 2 * a * a / radius
+    let omega = orbit.value * keplerian
+    if (orbit.value > 1) {
+      // matter cannot go faster than light: stop just short of u^t^-2 = 0.02, never below Keplerian
+      const limit = (4 * a / radius
+        + Math.sqrt(Math.max(16 * a * a / (radius * radius) + 4 * phiPhi * (1 - 2 / radius - 0.02), 0)))
+        / (2 * phiPhi)
+      omega = Math.min(omega, Math.max(keplerian, limit))
+    }
+    const radicand = 1 - 2 / radius + 4 * a * omega / radius - phiPhi * omega * omega
+    data[i * 4] = diskFlux(radius, fluxSpin, roots) * norm
+    data[i * 4 + 1] = omega
+    data[i * 4 + 2] = 1 / Math.sqrt(Math.max(radicand, 0.02))
+  }
+  return data
+}
+
+function updateDiskProfile() {
+  const key = `${spin.value}|${orbit.value}|${innerRadius.value}|${rOut.value}`
+  if (key === profileKey) return
+  profileKey = key
+  gl.bindTexture(gl.TEXTURE_2D, profileTexture)
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, TEXTURE_RADII, 1, 0, gl.RGBA, gl.FLOAT, buildDiskProfile())
+}
+
 function compileShader(type, source) {
   const shader = gl.createShader(type)
   gl.shaderSource(shader, source)
@@ -1556,7 +2101,7 @@ function createDiskTexture() {
 }
 
 function rebuildDiskTexture() {
-  if (!gl || busy.value) return
+  if (!gl || busy.value || volumetric.value) return
   if (builtTexture.detail === detail.value
     && builtTexture.contrast === contrast.value) return
   busy.value = true
@@ -1585,7 +2130,9 @@ function initGpu() {
   gl.disable(gl.DEPTH_TEST)
   gl.disable(gl.BLEND)
 
-  traceProgram = createProgram(TRACE_SOURCE)
+  // the starfield needs a fifth render target for the sky direction; without it the stars are off
+  starsAvailable.value = gl.getParameter(gl.MAX_DRAW_BUFFERS) >= 5
+  traceProgram = createProgram(starsAvailable.value ? TRACE_STARS_SOURCE : TRACE_SOURCE)
   shadeProgram = createProgram(SHADE_SOURCE)
   compositeProgram = createProgram(COMPOSITE_SOURCE)
   downsampleProgram = createProgram(DOWNSAMPLE_SOURCE)
@@ -1599,12 +2146,27 @@ function initGpu() {
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0)
   gl.bindVertexArray(vao)
 
-  diskTexture = createDiskTexture()
+  // The thin disk's texture is only built when it is used, so it is skipped while the volume is on
+  if (volumetric.value) {
+    builtTexture = { detail: Number.NaN, contrast: Number.NaN }
+    diskTexture = null
+  } else {
+    diskTexture = createDiskTexture()
+  }
+  volumeProgram = createProgram(VOLUME_SOURCE)
+  noiseTexture = createNoiseTexture()
+  profileTexture = gl.createTexture()
+  gl.bindTexture(gl.TEXTURE_2D, profileTexture)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  volumeTarget = createVolumeTarget()
 
   traceFramebuffer = gl.createFramebuffer()
   gl.bindFramebuffer(gl.FRAMEBUFFER, traceFramebuffer)
   const attachments = []
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < (starsAvailable.value ? 5 : 4); index += 1) {
     const texture = createTexture(gl.RGBA32F, gl.RGBA, gl.FLOAT, null, gl.NEAREST)
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + index, gl.TEXTURE_2D, texture, 0)
     traceTextures.push(texture)
@@ -1636,6 +2198,19 @@ function createTarget(size) {
   return { texture, framebuffer, width: size[0], height: size[1] }
 }
 
+function createVolumeTarget() {
+  return createTarget([Math.ceil(WIDTH * quality.value), Math.ceil(HEIGHT * quality.value)])
+}
+
+function resizeVolume() {
+  if (!gl || !volumeTarget) return
+  if (volumeTarget.width === Math.ceil(WIDTH * quality.value)) return
+  gl.deleteTexture(volumeTarget.texture)
+  gl.deleteFramebuffer(volumeTarget.framebuffer)
+  volumeTarget = createVolumeTarget()
+  dirty = true
+}
+
 function bindTexture(slot, texture) {
   gl.activeTexture(gl.TEXTURE0 + slot)
   gl.bindTexture(gl.TEXTURE_2D, texture)
@@ -1658,6 +2233,9 @@ function traceRays() {
   gl.uniform1f(traceProgram.uniforms.uROut, rOut.value)
   gl.uniform1f(traceProgram.uniforms.uSpin, spin.value)
   gl.uniform1f(traceProgram.uniforms.uOrbit, orbit.value)
+  gl.uniform1f(traceProgram.uniforms.uThin, volumetric.value ? 0 : 1)
+  // radians of sky per unit of screen coordinate: STAR_FOV over the picture's height in pixels
+  gl.uniform1f(traceProgram.uniforms.uStarFov, unit / HEIGHT * STAR_FOV)
   const fluxSpin = Math.max(diskSpin.value, 0.001)
   gl.uniform1f(traceProgram.uniforms.uFluxSpin, fluxSpin)
   const roots = fluxRoots(fluxSpin)
@@ -1675,6 +2253,61 @@ function traceRays() {
   drawPass(traceFramebuffer)
 }
 
+// The disk's pattern is sheared by differential rotation, which grows without bound, so it is
+// sampled at two phases that each wrap every cycle and are cross-faded (see the shade shader)
+function diskPhases() {
+  const cycle = (spinTime * SPIN_RATE) / SHEAR_CYCLE
+  const cycleA = cycle - Math.floor(cycle)
+  const cycleB = (cycle + 0.5) - Math.floor(cycle + 0.5)
+  return { a: cycleA * SHEAR_CYCLE, b: cycleB * SHEAR_CYCLE, mix: Math.sin(Math.PI * cycleA) ** 2 }
+}
+
+// Marches every ray through the gas. Unlike the trace this runs each frame, because the gas
+// moves, so its resolution is a share of the picture's.
+function renderVolume() {
+  updateDiskProfile()
+  const { program, uniforms } = volumeProgram
+  gl.useProgram(program)
+  gl.activeTexture(gl.TEXTURE0)
+  gl.bindTexture(gl.TEXTURE_3D, noiseTexture)
+  gl.uniform1i(uniforms.uNoise, 0)
+  bindTexture(1, profileTexture)
+  gl.uniform1i(uniforms.uProfile, 1)
+  gl.uniform2f(uniforms.uCenter, centerX, centerY)
+  const view = viewAngles()
+  gl.uniform1f(uniforms.uTilt, view.tilt)
+  gl.uniform1f(uniforms.uIncl, view.incl)
+  gl.uniform1f(uniforms.uUnit, unit)
+  gl.uniform1f(uniforms.uRIn, innerRadius.value)
+  gl.uniform1f(uniforms.uROut, rOut.value)
+  gl.uniform1f(uniforms.uSpin, spin.value)
+  const captureRadius = isNaked.value ? NAKED_CAPTURE_RADIUS : horizonRadius.value + HORIZON_MARGIN
+  gl.uniform1f(uniforms.uCapture, 1 / captureRadius)
+  // the jets reach further out than the gas
+  const jetsOn = jetStrength.value > 0
+  gl.uniform1f(uniforms.uOutInv, 1 / Math.max(rOut.value, jetsOn ? JET_LENGTH : 0))
+  gl.uniform1f(uniforms.uGasOutInv, 1 / rOut.value)
+  gl.uniform1f(uniforms.uGas, volumetric.value ? 1 : 0)
+  gl.uniform1f(uniforms.uJet, jetStrength.value)
+  gl.uniform1f(uniforms.uJetPhase, (spinTime * JET_SPEED) % 12)
+  gl.uniform1f(uniforms.uInInv, 1 / innerRadius.value)
+  // the gas is negligible beyond about 3.5 scale heights, which bounds the wedge worth sampling
+  gl.uniform1f(uniforms.uZCut, Math.min(1, 3.5 * thickness.value + 0.02))
+  gl.uniform1f(uniforms.uThick, thickness.value)
+  gl.uniform1f(uniforms.uDensity, density.value)
+  gl.uniform1f(uniforms.uContrast, contrast.value)
+  gl.uniform1f(uniforms.uNoiseScale, detail.value / 8 / NOISE_PERIOD)
+  // a whole number of tiles around the hole, so the noise has no seam
+  gl.uniform1f(uniforms.uAzimuthCycles, Math.max(1, Math.round(detail.value * 0.8)))
+  const phases = diskPhases()
+  gl.uniform1f(uniforms.uPhaseA, phases.a)
+  gl.uniform1f(uniforms.uPhaseB, phases.b)
+  gl.uniform1f(uniforms.uMixA, phases.mix)
+  gl.uniform1f(uniforms.uPeakTemp, PEAK_TEMP_WARM + (PEAK_TEMP_COOL - PEAK_TEMP_WARM) * temperature.value)
+  gl.uniform1f(uniforms.uVolScale, volumeTarget.width / WIDTH)
+  drawPass(volumeTarget.framebuffer, volumeTarget.width, volumeTarget.height)
+}
+
 function shadeScene() {
   const { program, uniforms } = shadeProgram
   gl.useProgram(program)
@@ -1684,16 +2317,22 @@ function shadeScene() {
   })
   bindTexture(4, diskTexture)
   gl.uniform1i(uniforms.uDisk, 4)
+  bindTexture(5, volumeNeeded.value ? volumeTarget.texture : null)
+  gl.uniform1f(uniforms.uVolumeOn, volumeNeeded.value ? 1 : 0)
+  gl.uniform1i(uniforms.uVolume, 5)
+  gl.uniform1f(uniforms.uVolumetric, volumetric.value ? 1 : 0)
+  bindTexture(6, traceTextures[4] ?? null)
+  gl.uniform1i(uniforms.uTrace4, 6)
+  gl.uniform1f(uniforms.uStars, starsAvailable.value && showStars.value ? starBrightness.value : 0)
+  gl.uniform1f(uniforms.uStarAmount, starAmount.value)
   gl.uniform2f(uniforms.uCenter, centerX, centerY)
   gl.uniform1f(uniforms.uTilt, viewAngles().tilt)
   gl.uniform1f(uniforms.uUnit, unit)
   gl.uniform1f(uniforms.uShadowPx, shadowPx)
-  const cycle = (spinTime * SPIN_RATE) / SHEAR_CYCLE
-  const cycleA = cycle - Math.floor(cycle)
-  const cycleB = (cycle + 0.5) - Math.floor(cycle + 0.5)
-  gl.uniform1f(uniforms.uPhaseA, cycleA * SHEAR_CYCLE)
-  gl.uniform1f(uniforms.uPhaseB, cycleB * SHEAR_CYCLE)
-  gl.uniform1f(uniforms.uMixA, Math.sin(Math.PI * cycleA) ** 2)
+  const phases = diskPhases()
+  gl.uniform1f(uniforms.uPhaseA, phases.a)
+  gl.uniform1f(uniforms.uPhaseB, phases.b)
+  gl.uniform1f(uniforms.uMixA, phases.mix)
   gl.uniform1f(uniforms.uTemperature, temperature.value)
   gl.uniform1f(uniforms.uBrightness, brightness.value)
   gl.uniform1f(uniforms.uPeakTemp, PEAK_TEMP_WARM + (PEAK_TEMP_COOL - PEAK_TEMP_WARM) * temperature.value)
@@ -1851,6 +2490,7 @@ function drawFrame() {
     traceRays()
     needsTrace = false
   }
+  if (volumeNeeded.value) renderVolume()
   shadeScene()
   drawSheet()
   if (bloom.value > 0) renderBloom()
