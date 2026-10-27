@@ -93,6 +93,15 @@
               <ControlSlider v-model="thickness" label="Thickness" hint="Height of the gas above and below the disk plane, as a fraction of the distance from the hole. The disk flares: it is thicker further out. The total amount of gas does not change, so a thicker disk is more diffuse." :min="0.01" :max="0.35" :step="0.01" :display="`${Math.round(thickness * 100)}%`" :disabled="controlsDisabled || !volumetric" />
               <ControlSlider v-model="density" label="Density" hint="How much gas there is, which is how opaque the volume is. Low values let you see through to the far side; high values make it a dense, dark-laned cloud that only shows its surface." :min="0.2" :max="4" :step="0.1" :display="density.toFixed(1)" :disabled="controlsDisabled || !volumetric" />
               <ControlSlider v-model="quality" label="Volume quality" hint="Resolution of the gas, as a share of the picture. Lower is faster and softer. Rebuilds the target when released." :min="0.25" :max="1" :step="0.05" :display="`${Math.round(quality * 100)}%`" :disabled="controlsDisabled || !volumetric" @change="resizeVolume" />
+              <UTooltip :ui="tipUi" text="Put a body with the Sun's true radius (695,700 km) in the disk, orbiting with the gas. It is drawn with the same bent light rays, so its far side is lensed over and under the hole, it hides the disk behind it, and the side moving towards you is brighter and bluer. At the same scale as the rings it is tiny for a heavy hole and huge for a light one. It is drawn by the volume pass, which redraws every frame.">
+                <UCheckbox v-model="showOrbiter" label="Orbiting Sun" :disabled="controlsDisabled" />
+              </UTooltip>
+              <UTooltip :ui="tipUi" text="Put a body with the Earth's true radius (6,371 km) beside the Sun, at the same orbit radius and 1 AU ahead of it along the orbit. The Earth gives no light of its own next to the disk, so it is a dark silhouette: lensed like everything else, and hiding the disk behind it. At the Sun's scale it is about 1/109 as wide, so it only becomes visible for a light hole. It is drawn by the volume pass, which redraws every frame.">
+                <UCheckbox v-model="showOrbiterEarth" label="Orbiting Earth" :disabled="controlsDisabled" />
+              </UTooltip>
+              <ControlSlider v-model="orbiterOrbit" label="Sun and Earth orbit" hint="Radius of the circular orbit of the Sun and the Earth in GM/c², from the disk's inner edge outwards. They ride just above the disk plane and turn with the disk at that radius: the closer in, the faster." :min="R_IN_MIN" :max="R_OUT_MAX" :step="0.5" :display="`${orbiterRadius.toFixed(1)} M`" :disabled="controlsDisabled || !(showOrbiter || showOrbiterEarth)" />
+              <UBadge v-if="showOrbiter" class="sm:col-span-2" color="neutral" variant="subtle" role="status">{{ orbiterStatus }}</UBadge>
+              <UBadge v-if="showOrbiterEarth" class="sm:col-span-2" color="neutral" variant="subtle" role="status">{{ earthStatus }}</UBadge>
             </div>
           </template>
           <template #display>
@@ -262,12 +271,20 @@ const JET_THRESHOLD = 0.02
 // radians) which is about a pixel wide at that field of view
 const STAR_FOV = 1.2
 const STAR_SIGMA = STAR_FOV / HEIGHT * 0.9
+// A Sun-sized body orbiting in the disk plane: its surface temperature in kelvin before the
+// shift, and how bright it is (scaled by the shift to the fourth power, as the disk is)
+const ORBITER_TEMPERATURE = 5772
+const ORBITER_LIGHT = 3
+// How high its centre rides above the disk plane, in body radii: just clear of the disk
+const ORBITER_CLEARANCE = 1.25
 const ROLL_SNAP = 2
 const MAX_INCL = 89 * Math.PI / 180
 const SPIN_RATE = 0.5
 // Max shear (radians between inner and outer disk) before the texture is cross-faded back
 const SHEAR_CYCLE = 2 * Math.PI
-const SHEAR = 1.0
+// the disk turns at (rIn / r)^SHEAR times SPIN_RATE; 1.5 is the Keplerian fall-off of the angular
+// velocity, so the speed along the orbit rises towards the hole
+const SHEAR = 1.5
 const TAU = 2 * Math.PI
 const STOPS = [
   [0, 0, 0, 0], [0.18, 46, 22, 11], [0.42, 150, 76, 30],
@@ -334,6 +351,10 @@ const DEFAULTS = {
   starBrightness: .4,
   starAmount: .04,
   showJets: false,
+  showOrbiter: false,
+  showOrbiterEarth: false,
+  // orbit radius of the body in GM/c^2
+  orbiterOrbit: 12,
   // log10 of the accretion rate as a share of the Eddington rate
   accretionLog: -2,
   volumetric: false,
@@ -393,6 +414,9 @@ const starAmount = ref(DEFAULTS.starAmount)
 const starsAvailable = ref(true)
 const volumetric = ref(DEFAULTS.volumetric)
 const showJets = ref(DEFAULTS.showJets)
+const showOrbiter = ref(DEFAULTS.showOrbiter)
+const showOrbiterEarth = ref(DEFAULTS.showOrbiterEarth)
+const orbiterOrbit = ref(DEFAULTS.orbiterOrbit)
 // log10 of the accretion rate as a share of the Eddington rate (-2 is 1%)
 const accretionLog = ref(DEFAULTS.accretionLog)
 const accretionRate = computed(() => 10 ** accretionLog.value)
@@ -415,7 +439,7 @@ const jetStatus = computed(() => {
 })
 const formatRate = (rate) => `${(rate * 100).toFixed(rate < 0.1 ? 2 : 1)}% of Eddington`
 // the volume pass draws the gas, the jets, or both
-const volumeNeeded = computed(() => volumetric.value || jetStrength.value > 0)
+const volumeNeeded = computed(() => volumetric.value || jetStrength.value > 0 || bodiesActive.value)
 const thickness = ref(DEFAULTS.thickness)
 const density = ref(DEFAULTS.density)
 const quality = ref(DEFAULTS.quality)
@@ -446,6 +470,15 @@ const infoTopics = [
       `With Volumetric gas and dust switched on (it is off by default) the disk is a layer of gas and dust with real thickness, and not a flat sheet. The volume pass follows each light ray along its bent path and, at every step through the gas, adds the light the gas gives off and removes the light its dust absorbs. Dense lanes therefore darken what lies behind them, thin gas lets the far side show through, and the layer is thicker the further out it is (it flares). The gas thins out smoothly above and below the disk plane, in a Gaussian profile.`,
       `The gas keeps the thin disk's physics: the same Novikov-Thorne brightness profile, Doppler shift and gravitational redshift, evaluated at the distance from the spin axis. Its clumps come from a tiling 3D noise texture, looked up in a way that stretches them along the orbit; the differential rotation then shears and turns them, as for the thin disk. Thickness is the height of the gas as a fraction of the radius (3% by default), and Density sets how opaque it is. Changing the thickness does not change the total amount of gas, so a thicker disk is more diffuse. Volume quality is the resolution of the gas as a share of the picture; lower it if the frame rate drops, raise it for sharper detail.`,
       `This is a simple emission and absorption model, with the temperature taken from the disk's midplane profile. It is not a simulation of a real disk's vertical structure, and it has no scattering. Turn the option off to go back to the thin disk, which is much cheaper to draw. Detail and Contrast then change the gas live, and rebuild the thin disk's texture when released.`,
+    ],
+  },
+  {
+    label: 'The orbiting Sun',
+    icon: 'i-lucide-sun',
+    paragraphs: [
+      `Orbiting Sun puts a body with the Sun's true radius just above the disk plane, on a circular orbit that turns with the disk at that radius. It is a sphere in the same volume pass as the gas, tested against each bent light ray, so it is lensed like everything else: its far side shows over and under the hole, and it hides the disk and stars behind it. Its light is shifted by the same factor g as the disk, so the side moving towards you is brighter and bluer, and it is darker towards the limb. It is drawn at 5,772 K.`,
+      `The Sun's radius is fixed in kilometres, so in units of GM/c² it depends on the mass: about 0.1 for Sagittarius A*, but larger than the whole disk for a hole of a few solar masses, where it is not drawn. A real star is torn apart by tides inside r = R (M / m)^(1/3); the badge says whether the orbit is inside that radius. The body is only shown, not simulated: it does not open a gap in the gas or feel drag.`,
+      `Orbiting Earth adds a body with the Earth's true radius beside the Sun, on the same orbit and 1 AU ahead of it (at most a quarter turn ahead on a small orbit). Next to the disk it gives no light, so it is a dark silhouette: lensed and hiding what is behind it, but not lit. It is about 1/109 of the Sun's width, so it is sub-pixel for a heavy hole and only shows for a light one, where the Sun itself is too large to draw. There are no shadows on the disk, because the disk glows by itself and has no single light source to cast one.`,
     ],
   },
   {
@@ -707,6 +740,30 @@ const iscoRadius = (a) => {
 const diskSpin = computed(() => Math.min(spin.value, MAX_SPIN))
 const innerRadius = computed(() => Math.max(rIn.value, iscoRadius(diskSpin.value)))
 
+// The orbiting Sun stays in the disk, between its inner and outer edge. Its radius is fixed in km,
+// so in GM/c^2 it is large around a light hole; it is only drawn when it fits well inside its orbit.
+const orbiterRadius = computed(() => Math.min(Math.max(orbiterOrbit.value, innerRadius.value), rOut.value))
+const orbiterFits = computed(() => sunRadius.value < 0.5 * orbiterRadius.value)
+const orbiterActive = computed(() => showOrbiter.value && orbiterFits.value)
+// The Earth rides beside the Sun at the same orbit radius, ahead of it by their true distance of
+// 1 AU along the orbit (at most a quarter turn, so it stays beside the Sun on a small orbit).
+// It is drawn on its own, so it still shows when the Sun is too large for this mass.
+const earthFits = computed(() => earthRadius.value < 0.5 * orbiterRadius.value)
+const earthActive = computed(() => showOrbiterEarth.value && earthFits.value)
+const earthAhead = computed(() => Math.min(KM_PER_AU / (KM_PER_SOLAR_MASS * solarMass.value) / orbiterRadius.value, Math.PI / 2))
+const bodiesActive = computed(() => orbiterActive.value || earthActive.value)
+const earthStatus = computed(() => {
+  if (!earthFits.value) return 'The Earth is too large for this orbit at this mass: raise the mass or the orbit radius'
+  return `The Earth is ${earthRadius.value.toPrecision(2)} GM/c² across at this mass. It is a dark silhouette, and it is only visible once it spans a pixel or two: lower the mass to enlarge it`
+})
+// Inside this radius the tides of the hole pull a Sun-like star apart: R (M / m)^(1/3), in GM/c^2
+const tidalRadius = computed(() => SOLAR_RADIUS_KM * solarMass.value ** (1 / 3) / (KM_PER_SOLAR_MASS * solarMass.value))
+const orbiterStatus = computed(() => {
+  if (!orbiterFits.value) return 'The Sun is too large for this orbit at this mass: raise the mass or the orbit radius'
+  if (orbiterRadius.value < tidalRadius.value) return `Inside the tidal radius (${tidalRadius.value.toFixed(1)} GM/c²): a real Sun would be torn apart here`
+  return `Outside the tidal radius (${tidalRadius.value.toFixed(1)} GM/c²): the Sun would survive here`
+})
+
 // Novikov-Thorne flux (Page & Thorne 1974), mirrored from the trace shader so the
 // peak over the visible disk can be found and the shader flux scaled to 1 there.
 function fluxRoots(a) {
@@ -743,7 +800,7 @@ watch([showSheet, sheetSize, showShift], () => {
 // The volume pass runs every frame, so these only need a redraw. Turning the volume on or off
 // changes what the trace records (the thin disk's crossings), and the thin disk's texture is
 // only rebuilt while it is not in use, so it is brought up to date when it comes back.
-watch([thickness, density, detail, contrast, showStars, starBrightness, starAmount, showJets, accretionLog], () => {
+watch([thickness, density, detail, contrast, showStars, starBrightness, starAmount, showJets, accretionLog, showOrbiter, showOrbiterEarth, orbiterOrbit, massLog], () => {
   dirty = true
 })
 watch(volumetric, (on) => {
@@ -898,19 +955,8 @@ float novikovThorneFlux(float radius) {
   return max(bracket, 0.0) / (x * x * x * x * (x * x * x - 3.0 * x + 2.0 * a));
 }
 
-// Disk emission at a crossing of the equatorial plane. Matter on a prograde
-// circular Kerr orbit has angular velocity W = 1 / (r^1.5 + a) and time
-// dilation u^t, so a photon with angular momentum L reaches infinity with
-// g = 1 / (u^t (1 - W L)): one factor covering Doppler and gravitational shift.
-// Observed bolometric intensity is g^4 times the emitted flux, and the observed
-// temperature is g times the local one (T ~ flux^(1/4)), so the stored value
-// g^4 F also carries the colour.
-void record(float radius, float angle) {
-  float edge = smoothstep(uRIn, uRIn + 0.7, radius)
-    * (1.0 - smoothstep(uROut * 0.35, uROut, radius));
-  if (edge <= 0.001) return;
-
-  float flux = novikovThorneFlux(radius) * uFluxNorm;
+// Angular velocity and time dilation of matter orbiting in the equatorial plane at a radius.
+vec2 orbitMotion(float radius) {
   float r15 = radius * sqrt(radius);
   // uOrbit scales the orbital angular velocity (1 is the Keplerian value). The time
   // dilation u^t = 1 / sqrt(-g_tt - 2 g_tphi W - g_phiphi W^2) of the equatorial Kerr metric
@@ -926,8 +972,24 @@ void record(float radius, float angle) {
     omega = min(omega, max(omegaKepler, limit));
   }
   float radicand = 1.0 - 2.0 / radius + 4.0 * uSpin * omega / radius - gPhiPhi * omega * omega;
-  float timeDilation = inversesqrt(max(radicand, 0.02));
-  float redshift = clamp(1.0 / (timeDilation * (1.0 - omega * gL)), 0.05, 2.0);
+  return vec2(omega, inversesqrt(max(radicand, 0.02)));
+}
+
+// Disk emission at a crossing of the equatorial plane. Matter on a prograde
+// circular Kerr orbit has angular velocity W = 1 / (r^1.5 + a) and time
+// dilation u^t, so a photon with angular momentum L reaches infinity with
+// g = 1 / (u^t (1 - W L)): one factor covering Doppler and gravitational shift.
+// Observed bolometric intensity is g^4 times the emitted flux, and the observed
+// temperature is g times the local one (T ~ flux^(1/4)), so the stored value
+// g^4 F also carries the colour.
+void record(float radius, float angle) {
+  float edge = smoothstep(uRIn, uRIn + 0.7, radius)
+    * (1.0 - smoothstep(uROut * 0.35, uROut, radius));
+  if (edge <= 0.001) return;
+
+  float flux = novikovThorneFlux(radius) * uFluxNorm;
+  vec2 motion = orbitMotion(radius);
+  float redshift = clamp(1.0 / (motion.y * (1.0 - motion.x * gL)), 0.05, 2.0);
   float textureAngle = angle;
   textureAngle -= TAU * floor((textureAngle + PI) / TAU);
   int base = gCount * 5;
@@ -990,12 +1052,21 @@ uniform float uPhaseB;
 uniform float uMixA;
 uniform float uPeakTemp;
 uniform float uVolScale;
+// The orbiting body: 1 if it is drawn; the radius of its orbit, its own radius and its azimuth (the
+// first two in GM/c^2); and the range of u = 1/r in which a step of a ray can touch it
+uniform float uBodyOn;
+uniform vec3 uBody;
+uniform vec2 uBodyBand;
+uniform vec2 uEarth;
 
 // Light, light-weighted temperature (K) and shift, and what is left of the ray after the gas
 float gVolLight = 0.0;
 float gVolTemp = 0.0;
 float gVolShift = 0.0;
 float gVolT = 1.0;
+// How much of the ray the body has covered so far, 0 to 1
+float gBodyCover = 0.0;
+float gEarthCover = 0.0;
 
 vec3 volumePoint(float u, vec3 n, float extra) {
   float cs = cos(extra);
@@ -1019,7 +1090,7 @@ void volumeGas(vec3 pos, float dl) {
   // number of tiles around, so the clumps are stretched along the orbit; the skew in azimuth keeps
   // the tiles that repeat along the radius from lining up.
   float gas = 0.0;
-  float shear = uRIn / radius;
+  float shear = pow(uRIn / radius, SHEAR);
   float azimuth = atan(pos.y, pos.x);
   for (int layer = 0; layer < 2; layer += 1) {
     float weight = layer == 0 ? uMixA : 1.0 - uMixA;
@@ -1095,10 +1166,54 @@ void volumeJet(vec3 pos, float dl, vec3 toward) {
   gVolShift += light * clamp(log2(shift), -1.0, 1.0);
 }
 
+// A step of the ray against the body, a Sun-sized sphere on a circular orbit in the disk plane. It
+// is covered where the step passes within its radius of its centre, with the edge softened over
+// half a pixel of this target so that it does not alias. The light of the newly covered part is added,
+// darker towards the limb, and what lies behind it is hidden. The light is shifted like the disk's,
+// by g = 1 / (u^t (1 - W L)) at its orbit, so the side moving towards you is brighter and bluer.
+// The covered part is tracked per body in "covered". A body that gives no light (the Earth, which is
+// dark next to the disk) only hides what is behind it, as a silhouette.
+void volumeSphere(vec3 from, vec3 to, vec3 centre, float radius, float emits, inout float covered) {
+  if (radius <= 0.0) return;
+  vec3 along = to - from;
+  float t = clamp(dot(centre - from, along) / max(dot(along, along), 1e-8), 0.0, 1.0);
+  float distanceToCentre = distance(centre, from + t * along);
+  float soft = 0.5 / (uUnit * uVolScale);
+  float cover = 1.0 - smoothstep(radius - soft, radius + soft, distanceToCentre);
+  float fresh = cover - covered;
+  if (fresh <= 0.0) return;
+
+  if (emits > 0.0) {
+    vec2 motion = orbitMotion(uBody.x);
+    float shift = clamp(1.0 / (motion.y * (1.0 - motion.x * gL)), 0.05, 2.0);
+    float ratio = distanceToCentre / radius;
+    float limb = 1.0 - 0.6 * (1.0 - sqrt(max(1.0 - ratio * ratio, 0.0)));
+    float light = gVolT * fresh * ${f(ORBITER_LIGHT)} * limb * min(pow(shift, 4.0), 6.0);
+    gVolLight += light;
+    gVolTemp += light * ${f(ORBITER_TEMPERATURE)} * shift;
+    gVolShift += light * clamp(log2(shift), -1.0, 1.0);
+  }
+  // what is left is the part of the ray the body does not cover
+  gVolT *= (1.0 - cover) / max(1.0 - covered, 1e-4);
+  covered = cover;
+}
+
+// The Sun and the Earth beside it, both just above the disk plane at the same orbit radius. uBody
+// holds the orbit radius, the Sun's radius (0 if it is not drawn) and the Sun's azimuth; uEarth
+// holds the Earth's radius (0 if it is not drawn) and how far ahead of the Sun it is.
+void volumeBody(vec3 from, vec3 to) {
+  vec3 sun = vec3(cos(uBody.z) * uBody.x, sin(uBody.z) * uBody.x, uBody.y * ${f(ORBITER_CLEARANCE)});
+  volumeSphere(from, to, sun, uBody.y, 1.0, gBodyCover);
+  float earthAzimuth = uBody.z + uEarth.y;
+  vec3 earth = vec3(cos(earthAzimuth) * uBody.x, sin(earthAzimuth) * uBody.x, uEarth.x * ${f(ORBITER_CLEARANCE)});
+  volumeSphere(from, to, earth, uEarth.x, 0.0, gEarthCover);
+}
+
 // One integration step of the ray, from (u, n, extra) to the next state, in the hole's frame
 void volumeStep(float u, vec3 n, float extra, float nextU, vec3 nextN, float nextExtra) {
   vec3 from = volumePoint(u, n, extra);
   vec3 to = volumePoint(nextU, nextN, nextExtra);
+  if (uBodyOn > 0.5) volumeBody(from, to);
   float span = distance(from, to);
   // the light travels towards the observer, against the direction the ray is followed in
   vec3 toward = (from - to) / max(span, 1e-5);
@@ -1236,7 +1351,8 @@ void traceRay(vec2 screen, float cosObs, float sinObs) {
       float h = r * abs(nextN.z);
       inJet = h > JET_BASE && r * sqrt(max(1.0 - nextN.z * nextN.z, 0.0)) < 3.5 * jetWidth(h);
     }
-    if (inGas || inJet) {
+    bool inBody = uBodyOn > 0.5 && max(u, nextU) >= uBodyBand.x && min(u, nextU) <= uBodyBand.y;
+    if (inGas || inJet || inBody) {
       volumeStep(u, n, extra, nextU, nextN, nextExtra);
       if (gVolT < 0.01) return;
     }
@@ -1318,6 +1434,8 @@ uniform sampler2D uVolume;
 uniform float uVolumetric;
 // 1 if the volume pass was drawn (the gas is on, or the jets are); uVolumetric is the gas alone
 uniform float uVolumeOn;
+// 1 if the volume pass also holds something solid (the orbiting body) that hides what is behind it
+uniform float uBodyOn;
 // Where each ray ends in the sky (see the trace shader) and the star brightness, 0 for no stars
 uniform sampler2D uTrace4;
 uniform float uStars;
@@ -1428,7 +1546,7 @@ void main() {
   // the volume pass holds the gas, the jets or both; the thin disk's crossings are added below
   if (uVolumeOn > 0.5) {
     vec4 volume = texture(uVolume, gl_FragCoord.xy / vec2(W, H));
-    if (uVolumetric > 0.5) transmittance = 1.0 - volume.a;
+    if (uVolumetric > 0.5 || uBodyOn > 0.5) transmittance = 1.0 - volume.a;
     float lit = max(volume.r, 1e-6);
     float shiftLog = volume.b / lit;
     vec3 shiftColor = mix(vec3(1.0), shiftLog > 0.0 ? vec3(0.25, 0.55, 1.0) : vec3(1.0, 0.2, 0.1), abs(shiftLog));
@@ -1785,7 +1903,7 @@ function wheelZoom(event) {
 // disk texture, and the volume quality its target, so they jump at the end instead of animating.
 const RESET_MS = 800
 const RESET_KEYS = {
-  bloom, speed, orbit, zoom, massLog, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin, thickness, density, starBrightness, starAmount, accretionLog,
+  bloom, speed, orbit, zoom, massLog, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin, thickness, density, starBrightness, starAmount, accretionLog, orbiterOrbit,
 }
 let resetFrame = 0
 let resetting = false
@@ -1815,6 +1933,8 @@ function resetControls() {
   volumetric.value = DEFAULTS.volumetric
   showStars.value = DEFAULTS.showStars
   showJets.value = DEFAULTS.showJets
+  showOrbiter.value = DEFAULTS.showOrbiter
+  showOrbiterEarth.value = DEFAULTS.showOrbiterEarth
   const from = Object.fromEntries(Object.entries(RESET_KEYS).map(([key, control]) => [key, control.value]))
   const fromX = centerX
   const fromY = centerY
@@ -2285,7 +2405,22 @@ function renderVolume() {
   gl.uniform1f(uniforms.uCapture, 1 / captureRadius)
   // the jets reach further out than the gas
   const jetsOn = jetStrength.value > 0
-  gl.uniform1f(uniforms.uOutInv, 1 / Math.max(rOut.value, jetsOn ? JET_LENGTH : 0))
+  const bodyOrbit = orbiterRadius.value
+  // a radius of 0 means that body is not drawn
+  const sunSize = orbiterActive.value ? sunRadius.value : 0
+  const earthSize = earthActive.value ? earthRadius.value : 0
+  const bodySize = Math.max(sunSize, earthSize)
+  const margin = 1.5 * WIDTH / (unit * volumeTarget.width)
+  // the bodies' centres are a little above the disk plane, so they are slightly further than their orbit radius
+  const bodyDistance = Math.hypot(bodyOrbit, bodySize * ORBITER_CLEARANCE)
+  // rays are followed out as far as the bodies, if they are drawn
+  const bodyReach = bodiesActive.value ? bodyDistance + bodySize + margin : 0
+  gl.uniform1f(uniforms.uOutInv, 1 / Math.max(rOut.value, jetsOn ? JET_LENGTH : 0, bodyReach))
+  // the body rides with the disk's pattern at its radius, which turns at (rIn / r)^SHEAR times SPIN_RATE
+  gl.uniform1f(uniforms.uBodyOn, bodiesActive.value ? 1 : 0)
+  gl.uniform2f(uniforms.uEarth, earthSize, earthAhead.value)
+  gl.uniform3f(uniforms.uBody, bodyOrbit, sunSize,(spinTime * SPIN_RATE * (innerRadius.value / bodyOrbit) ** SHEAR) % TAU)
+  gl.uniform2f(uniforms.uBodyBand, 1 / (bodyDistance + bodySize + margin), 1 / Math.max(bodyDistance - bodySize - margin, 0.05))
   gl.uniform1f(uniforms.uGasOutInv, 1 / rOut.value)
   gl.uniform1f(uniforms.uGas, volumetric.value ? 1 : 0)
   gl.uniform1f(uniforms.uJet, jetStrength.value)
@@ -2321,6 +2456,7 @@ function shadeScene() {
   gl.uniform1f(uniforms.uVolumeOn, volumeNeeded.value ? 1 : 0)
   gl.uniform1i(uniforms.uVolume, 5)
   gl.uniform1f(uniforms.uVolumetric, volumetric.value ? 1 : 0)
+  gl.uniform1f(uniforms.uBodyOn, bodiesActive.value ? 1 : 0)
   bindTexture(6, traceTextures[4] ?? null)
   gl.uniform1i(uniforms.uTrace4, 6)
   gl.uniform1f(uniforms.uStars, starsAvailable.value && showStars.value ? starBrightness.value : 0)
