@@ -1,2 +1,17 @@
 @import "tailwindcss";
 @import "@nuxt/ui";
+
+/* Disabled controls: clearly faded, desaturated and not clickable.
+   Applied once per control (checkbox root, slider field, button) so the fades don't stack. */
+.control-disabled,
+[data-slot="root"]:has(> [data-slot="container"] > button[role="checkbox"]:disabled),
+button:disabled:not([role="checkbox"], [role="slider"]) {
+  opacity: 0.35 !important;
+  filter: grayscale(1);
+  cursor: not-allowed;
+}
+
+.control-disabled *,
+[data-slot="root"]:has(> [data-slot="container"] > button[role="checkbox"]:disabled) * {
+  cursor: not-allowed;
+}

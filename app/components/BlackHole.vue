@@ -39,25 +39,32 @@
       :handle="false"
       close
       :content="{ style: panelColors }"
+      :ui="{ content: 'bg-default/80' }"
       @update:open="panelHidden = !$event"
     >
       <template #body>
         <UTabs :items="controlTabs" variant="link" size="sm" :unmount-on-hide="false">
           <template #blackhole>
             <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2">
+              <div class="space-y-3">
               <ControlSlider v-model="massLog" label="Mass (M☉)" hint="Mass of the black hole in solar masses (logarithmic, 1 to 66 billion). The default is about Sagittarius A*. The picture looks the same at any mass, because the physics scales with it; mass sets the real size, shown as the horizon radius." :min="MASS_LOG_MIN" :max="MASS_LOG_MAX" :step="0.02" :display="formatMass(solarMass)" :disabled="controlsDisabled" />
+              <UTooltip text="Size of the event horizon (the point of no return) for the chosen mass and spin. It shrinks as the spin grows.">
+                <UBadge :ui="badgeUi" color="neutral" variant="subtle">{{ isNaked ? 'No event horizon' : `Horizon radius ${formatLength(horizonKm)}` }}</UBadge>
+              </UTooltip>
+              </div>
+              <div class="space-y-3">
               <ControlSlider v-model="spin" label="Spin a/M" hint="Spin of the black hole, a/M, from 0 (not rotating) to 0.998 (nearly the maximum), or up to 1.5 with Allow spin above 1. More spin drags space around, shrinks the horizon, moves the disk's inner edge closer and flattens the shadow." :min="0" :max="spinMax" :step="0.002" :display="spin.toFixed(3)" :disabled="controlsDisabled" />
+              <UTooltip :ui="tipUi" text="Let the Spin slider go past 1, up to 1.5. A real black hole cannot spin faster than a/M = 1; beyond it the horizon disappears and a naked singularity is left. This is an experiment with approximations, not physics: it has no horizon, so light is simply discarded very close in, and the disk keeps the profile of the fastest physical spin.">
+                <UCheckbox v-model="allowNaked" label="Allow spin above 1 (not physical)" :disabled="controlsDisabled" />
+              </UTooltip>
+              </div>
+              <div class="space-y-3">
               <ControlSlider v-model="accretionLog" label="Accretion rate" hint="How fast matter falls into the hole, as a share of the Eddington rate: the rate at which the radiation it gives off would push back as hard as gravity pulls in. It is not the mass of the disk. Relativistic jets switch on when it drops below about 2% of the Eddington rate, and need a fast spin; at higher rates the disk is thin and the jets are suppressed. Logarithmic, from 0.1% to 100%." :min="-3" :max="0" :step="0.05" :display="formatRate(accretionRate)" :disabled="controlsDisabled" />
               <UTooltip :ui="tipUi" text="Draw the relativistic jets: beams of plasma launched along the spin axis, up and down. The one pointing towards you is Doppler beamed, so it looks much brighter and bluer than the one pointing away. They only show when the accretion rate is low enough (below about 2% of Eddington) and the spin is high. They are drawn with the same bent light rays as the rest, so the far jet is lensed too.">
                 <UCheckbox v-model="showJets" label="Show relativistic jets" :disabled="controlsDisabled" />
               </UTooltip>
-              <UBadge class="sm:col-span-2" color="neutral" variant="subtle" role="status">{{ jetStatus }}</UBadge>
-              <UTooltip text="Size of the event horizon (the point of no return) for the chosen mass and spin. It shrinks as the spin grows.">
-                <UBadge color="neutral" variant="subtle">{{ isNaked ? 'No event horizon' : `Horizon radius ${formatLength(horizonKm)}` }}</UBadge>
-              </UTooltip>
-              <UTooltip :ui="tipUi" text="Let the Spin slider go past 1, up to 1.5. A real black hole cannot spin faster than a/M = 1; beyond it the horizon disappears and a naked singularity is left. This is an experiment with approximations, not physics: it has no horizon, so light is simply discarded very close in, and the disk keeps the profile of the fastest physical spin.">
-                <UCheckbox v-model="allowNaked" label="Allow spin above 1 (not physical)" :disabled="controlsDisabled" />
-              </UTooltip>
+              <UBadge :ui="badgeUi" color="neutral" variant="subtle" role="status">{{ jetStatus }}</UBadge>
+              </div>
               <UAlert
                 v-if="isNaked"
                 class="sm:col-span-2"
@@ -73,7 +80,8 @@
             <div class="grid gap-x-6 gap-y-3 pt-3 sm:grid-cols-2">
               <ControlSlider v-model="zoom" label="Zoom" hint="Camera distance: how large the hole appears on screen. It does not change the physics. The scroll wheel does the same." :min="0.1" :max="1.5" :step="0.05" :display="`${Math.round(zoom * 100)}%`" :disabled="controlsDisabled" />
               <ControlSlider v-model="pitch" label="Pitch" hint="Tilt of the disk towards the viewer. 0° sees it edge-on, 89° almost face-on. Dragging up or down changes it." :min="0" :max="89" :step="1" :display="`${Math.round(pitch)}°`" :disabled="controlsDisabled" />
-              <ControlSlider v-model="yaw" label="Yaw" hint="Swing the disk's tilt to the left or right. Dragging sideways changes it." :min="-90" :max="90" :step="1" :display="`${Math.round(yaw)}°`" :disabled="controlsDisabled" />
+              <ControlSlider v-model="azimuth" label="Orbit" hint="Move the camera around the disk, in its plane, keeping the same height above it. The disk itself is symmetric, so what turns is the gas clumps, the Sun and Earth, the grid and the stars. Dragging sideways changes it." :min="-180" :max="180" :step="1" :display="`${Math.round(azimuth)}°`" :disabled="controlsDisabled" />
+              <ControlSlider v-model="yaw" label="Yaw" hint="Swing the disk's tilt to the left or right." :min="-90" :max="90" :step="1" :display="`${Math.round(yaw)}°`" :disabled="controlsDisabled" />
               <ControlSlider v-model="roll" label="Roll" hint="Rotate the view around the line of sight, like turning the camera. Snaps to 0 near zero." :min="-180" :max="180" :step="0.5" :display="`${roll.toFixed(1)}°`" :disabled="controlsDisabled" />
             </div>
           </template>
@@ -93,19 +101,10 @@
               <ControlSlider v-model="thickness" label="Thickness" hint="Height of the gas above and below the disk plane, as a fraction of the distance from the hole. The disk flares: it is thicker further out. The total amount of gas does not change, so a thicker disk is more diffuse." :min="0.01" :max="0.35" :step="0.01" :display="`${Math.round(thickness * 100)}%`" :disabled="controlsDisabled || !volumetric" />
               <ControlSlider v-model="density" label="Density" hint="How much gas there is, which is how opaque the volume is. Low values let you see through to the far side; high values make it a dense, dark-laned cloud that only shows its surface." :min="0.2" :max="4" :step="0.1" :display="density.toFixed(1)" :disabled="controlsDisabled || !volumetric" />
               <ControlSlider v-model="quality" label="Volume quality" hint="Resolution of the gas, as a share of the picture. Lower is faster and softer. Rebuilds the target when released." :min="0.25" :max="1" :step="0.05" :display="`${Math.round(quality * 100)}%`" :disabled="controlsDisabled || !volumetric" @change="resizeVolume" />
-              <UTooltip :ui="tipUi" text="Put a body with the Sun's true radius (695,700 km) in the disk, orbiting with the gas. It is drawn with the same bent light rays, so its far side is lensed over and under the hole, it hides the disk behind it, and the side moving towards you is brighter and bluer. At the same scale as the rings it is tiny for a heavy hole and huge for a light one. It is drawn by the volume pass, which redraws every frame.">
-                <UCheckbox v-model="showOrbiter" label="Orbiting Sun" :disabled="controlsDisabled" />
-              </UTooltip>
-              <UTooltip :ui="tipUi" text="Put a body with the Earth's true radius (6,371 km) beside the Sun, at the same orbit radius and 1 AU ahead of it along the orbit. The Earth gives no light of its own next to the disk, so it is a dark silhouette: lensed like everything else, and hiding the disk behind it. At the Sun's scale it is about 1/109 as wide, so it only becomes visible for a light hole. It is drawn by the volume pass, which redraws every frame.">
-                <UCheckbox v-model="showOrbiterEarth" label="Orbiting Earth" :disabled="controlsDisabled" />
-              </UTooltip>
-              <ControlSlider v-model="orbiterOrbit" label="Sun and Earth orbit" hint="Radius of the circular orbit of the Sun and the Earth in GM/c², from the disk's inner edge outwards. They ride just above the disk plane and turn with the disk at that radius: the closer in, the faster." :min="R_IN_MIN" :max="R_OUT_MAX" :step="0.5" :display="`${orbiterRadius.toFixed(1)} M`" :disabled="controlsDisabled || !(showOrbiter || showOrbiterEarth)" />
-              <UBadge v-if="showOrbiter" class="sm:col-span-2" color="neutral" variant="subtle" role="status">{{ orbiterStatus }}</UBadge>
-              <UBadge v-if="showOrbiterEarth" class="sm:col-span-2" color="neutral" variant="subtle" role="status">{{ earthStatus }}</UBadge>
             </div>
           </template>
           <template #display>
-            <div class="grid gap-x-8 gap-y-4 pt-3 md:grid-cols-2 xl:grid-cols-4">
+            <div class="grid gap-x-8 gap-y-4 pt-3 md:grid-cols-2 xl:grid-cols-3">
               <div class="space-y-3">
                 <USeparator label="Colour and glow" />
                 <UTooltip :ui="tipUi" text="Draw a field of stars far behind the hole. Each pixel's light ray ends up pointing at some part of the sky once gravity has bent it, so the stars show the lensing: they are stretched into arcs and a ring around the shadow, and the hole itself shows none, since that light fell in. Dense gas in front hides them. The stars are made up, and the field of view is a choice; the bending is the real one.">
@@ -143,6 +142,18 @@
                 <UTooltip :ui="tipUi" text="Draw a green ring the size of the Solar System out to Neptune's orbit (30 AU, 4.5 billion km radius) at the same scale. It only fits on screen for very massive holes, roughly a billion solar masses or more.">
                   <UCheckbox v-model="showSolarSystem" label="Show Solar System (Neptune)" :disabled="controlsDisabled" />
                 </UTooltip>
+              </div>
+              <div class="space-y-3">
+                <USeparator label="Orbiting bodies" />
+                <UTooltip :ui="tipUi" text="Put a body with the Sun's true radius (695,700 km) in the disk, orbiting with the gas. It is drawn with the same bent light rays, so its far side is lensed over and under the hole, it hides the disk behind it, and the side moving towards you is brighter and bluer. At the same scale as the rings it is tiny for a heavy hole and huge for a light one. It is drawn by the volume pass, which redraws every frame.">
+                  <UCheckbox v-model="showOrbiter" label="Orbiting Sun" :disabled="controlsDisabled" />
+                </UTooltip>
+                <UTooltip :ui="tipUi" text="Put a body with the Earth's true radius (6,371 km) beside the Sun, at the same orbit radius and 1 AU ahead of it along the orbit. The Earth gives no light of its own next to the disk, so it is a dark silhouette: lensed like everything else, and hiding the disk behind it. At the Sun's scale it is about 1/109 as wide, so it only becomes visible for a light hole. It is drawn by the volume pass, which redraws every frame.">
+                  <UCheckbox v-model="showOrbiterEarth" label="Orbiting Earth" :disabled="controlsDisabled" />
+                </UTooltip>
+                <ControlSlider v-model="orbiterOrbit" label="Sun and Earth orbit" hint="Radius of the circular orbit of the Sun and the Earth in GM/c², from the disk's inner edge outwards. They ride just above the disk plane and turn with the disk at that radius: the closer in, the faster." :min="R_IN_MIN" :max="R_OUT_MAX" :step="0.5" :display="`${orbiterRadius.toFixed(1)} M`" :disabled="controlsDisabled || !(showOrbiter || showOrbiterEarth)" />
+                <UBadge v-if="showOrbiter" :ui="badgeUi" color="neutral" variant="subtle" role="status">{{ orbiterStatus }}</UBadge>
+                <UBadge v-if="showOrbiterEarth" :ui="badgeUi" color="neutral" variant="subtle" role="status">{{ earthStatus }}</UBadge>
               </div>
               <div class="space-y-3">
                 <USeparator label="Rubber sheet" />
@@ -342,6 +353,7 @@ const DEFAULTS = {
   roll: 15.5,
   pitch: 84,
   yaw: 0,
+  azimuth: 0,
   detail: 8,
   contrast: 1.4,
   rIn: R_IN_MIN,
@@ -402,6 +414,7 @@ const brightness = ref(DEFAULTS.brightness)
 const roll = ref(DEFAULTS.roll)
 const pitch = ref(DEFAULTS.pitch)
 const yaw = ref(DEFAULTS.yaw)
+const azimuth = ref(DEFAULTS.azimuth)
 const detail = ref(DEFAULTS.detail)
 const contrast = ref(DEFAULTS.contrast)
 const rIn = ref(DEFAULTS.rIn)
@@ -431,12 +444,14 @@ const jetStrength = computed(() => {
 })
 // What the jets are doing, for the badge next to the accretion rate
 const jetStatus = computed(() => {
-  if (!showJets.value) return 'Jets are hidden'
-  if (accretionRate.value >= 2 * JET_THRESHOLD) return `Jets off: the rate is above ${Math.round(200 * JET_THRESHOLD)}% of Eddington`
-  if (jetStrength.value <= 0.02) return 'Jets off: the hole spins too slowly'
-  if (accretionRate.value > JET_THRESHOLD) return 'Jets fading: the rate is above the 2% threshold'
-  return jetStrength.value < 0.95 ? 'Jets on, weak: slow spin' : 'Jets on'
+  if (!showJets.value) return 'Jets hidden'
+  if (accretionRate.value >= 2 * JET_THRESHOLD) return `Jets off: rate above ${Math.round(200 * JET_THRESHOLD)}% of Eddington`
+  if (jetStrength.value <= 0.02) return 'Jets off: spin too low'
+  if (accretionRate.value > JET_THRESHOLD) return `Jets fading: rate above ${Math.round(100 * JET_THRESHOLD)}% of Eddington`
+  return jetStrength.value < 0.95 ? 'Jets on, weak: low spin' : 'Jets on'
 })
+// Status badges: the full width of their column, wrapping, so they line up with each other
+const badgeUi = { base: 'w-full justify-start whitespace-normal' }
 const formatRate = (rate) => `${(rate * 100).toFixed(rate < 0.1 ? 2 : 1)}% of Eddington`
 // the volume pass draws the gas, the jets, or both
 const volumeNeeded = computed(() => volumetric.value || jetStrength.value > 0 || bodiesActive.value)
@@ -753,15 +768,15 @@ const earthActive = computed(() => showOrbiterEarth.value && earthFits.value)
 const earthAhead = computed(() => Math.min(KM_PER_AU / (KM_PER_SOLAR_MASS * solarMass.value) / orbiterRadius.value, Math.PI / 2))
 const bodiesActive = computed(() => orbiterActive.value || earthActive.value)
 const earthStatus = computed(() => {
-  if (!earthFits.value) return 'The Earth is too large for this orbit at this mass: raise the mass or the orbit radius'
-  return `The Earth is ${earthRadius.value.toPrecision(2)} GM/c² across at this mass. It is a dark silhouette, and it is only visible once it spans a pixel or two: lower the mass to enlarge it`
+  if (!earthFits.value) return 'Earth too large for this orbit: raise mass or orbit radius'
+  return `Earth ${earthRadius.value.toPrecision(2)} GM/c² across: a dark silhouette, lower the mass to enlarge it`
 })
 // Inside this radius the tides of the hole pull a Sun-like star apart: R (M / m)^(1/3), in GM/c^2
 const tidalRadius = computed(() => SOLAR_RADIUS_KM * solarMass.value ** (1 / 3) / (KM_PER_SOLAR_MASS * solarMass.value))
 const orbiterStatus = computed(() => {
-  if (!orbiterFits.value) return 'The Sun is too large for this orbit at this mass: raise the mass or the orbit radius'
-  if (orbiterRadius.value < tidalRadius.value) return `Inside the tidal radius (${tidalRadius.value.toFixed(1)} GM/c²): a real Sun would be torn apart here`
-  return `Outside the tidal radius (${tidalRadius.value.toFixed(1)} GM/c²): the Sun would survive here`
+  if (!orbiterFits.value) return 'Sun too large for this orbit: raise mass or orbit radius'
+  if (orbiterRadius.value < tidalRadius.value) return `Inside tidal radius (${tidalRadius.value.toFixed(1)} GM/c²): Sun torn apart`
+  return `Outside tidal radius (${tidalRadius.value.toFixed(1)} GM/c²): Sun survives`
 })
 
 // Novikov-Thorne flux (Page & Thorne 1974), mirrored from the trace shader so the
@@ -809,7 +824,7 @@ watch(volumetric, (on) => {
   if (!on) rebuildDiskTexture()
 })
 
-watch([rIn, rOut, roll, pitch, yaw, spin, orbit, showGrid, gridSize, gridLines, showGridX, showGridY, showGridZ, showGridStack], () => {
+watch([rIn, rOut, roll, pitch, yaw, azimuth, spin, orbit, showGrid, gridSize, gridLines, showGridX, showGridY, showGridZ, showGridStack], () => {
   needsTrace = true
   dirty = true
 })
@@ -836,6 +851,12 @@ const float TEXTURE_RADII = ${f(TEXTURE_RADII)};
 const float TEXTURE_ANGLES = ${f(TEXTURE_ANGLES)};
 const float SHEAR = ${f(SHEAR)};
 uniform float uTilt;
+// Colour for the redshift and blueshift view from log2(g): white where unshifted, red or blue
+// where shifted. The gain makes a modest shift already clearly coloured instead of pale.
+const float SHIFT_GAIN = 2.0;
+vec3 shiftTint(float shiftLog) {
+  return mix(vec3(1.0), shiftLog > 0.0 ? vec3(0.25, 0.55, 1.0) : vec3(1.0, 0.2, 0.1), clamp(abs(shiftLog) * SHIFT_GAIN, 0.0, 1.0));
+}
 vec2 pixelCoord() {
   return vec2(gl_FragCoord.x - 0.5, H - 0.5 - gl_FragCoord.y);
 }
@@ -863,6 +884,9 @@ uniform float uUnit;
 uniform float uRIn;
 uniform float uROut;
 uniform float uIncl;
+// Camera azimuth around the disk's axis, in radians: the rays start with this much azimuth already
+// accumulated, which turns everything fixed in the world (clumps, bodies, grid, stars) the other way
+uniform float uAzimuth;
 uniform float uSpin;
 // Spin used for the disk's flux profile: uSpin, held to the physical range
 uniform float uFluxSpin;
@@ -1186,7 +1210,9 @@ void volumeSphere(vec3 from, vec3 to, vec3 centre, float radius, float emits, in
   if (emits > 0.0) {
     vec2 motion = orbitMotion(uBody.x);
     float shift = clamp(1.0 / (motion.y * (1.0 - motion.x * gL)), 0.05, 2.0);
-    float ratio = distanceToCentre / radius;
+    // the limb darkening uses the distance of the ray's line to the centre, not of this step: the
+    // steps are long this far out, so their distance falls in bands that show as rings on the body
+    float ratio = min(length(cross(centre - from, along)) / (max(length(along), 1e-5) * radius), 1.0);
     float limb = 1.0 - 0.6 * (1.0 - sqrt(max(1.0 - ratio * ratio, 0.0)));
     float light = gVolT * fresh * ${f(ORBITER_LIGHT)} * limb * min(pow(shift, 4.0), 6.0);
     gVolLight += light;
@@ -1260,7 +1286,7 @@ void traceRay(vec2 screen, float cosObs, float sinObs) {
   float vu = 1.0;
   vec3 n = vec3(sinObs, 0.0, cosObs);
   vec3 v = vec3(-beta * cosObs, alpha, beta * sinObs);
-  float extra = 0.0;
+  float extra = uAzimuth;
   float nearCount = 0.0;
   float gridExtent = uGridExtent;
   // the lattice cube fits inside a sphere of 1.74 times its half-size
@@ -1549,7 +1575,7 @@ void main() {
     if (uVolumetric > 0.5 || uBodyOn > 0.5) transmittance = 1.0 - volume.a;
     float lit = max(volume.r, 1e-6);
     float shiftLog = volume.b / lit;
-    vec3 shiftColor = mix(vec3(1.0), shiftLog > 0.0 ? vec3(0.25, 0.55, 1.0) : vec3(1.0, 0.2, 0.1), abs(shiftLog));
+    vec3 shiftColor = shiftTint(shiftLog);
     diskLight = volume.r * mix(blackbody(volume.g / lit * 1000.0), shiftColor, uShift);
   }
   for (int i = 0; i < ${MAX_CROSSINGS}; i += 1) {
@@ -1592,7 +1618,7 @@ void main() {
     // Optionally colour by the shift itself: red where light is redshifted (g < 1, receding
     // or deep in the well), blue where it is blueshifted (g > 1), white where unchanged.
     float shiftLog = clamp(log2(shift), -1.0, 1.0);
-    vec3 shiftColor = mix(vec3(1.0), shiftLog > 0.0 ? vec3(0.25, 0.55, 1.0) : vec3(1.0, 0.2, 0.1), abs(shiftLog));
+    vec3 shiftColor = shiftTint(shiftLog);
     diskLight += transmittance * opacity * g[k + 3] * disk.r * mix(blackbody(temperature), shiftColor, uShift);
     transmittance *= 1.0 - opacity;
     if (transmittance < 0.02) break;
@@ -1857,13 +1883,13 @@ onBeforeUnmount(() => {
   gl?.getExtension('WEBGL_lose_context')?.loseContext()
 })
 
-// Dragging with the left button rotates the view: horizontal drag changes yaw,
-// vertical drag changes pitch (the same values as the sliders).
+// Dragging with the left button orbits the camera: horizontal drag moves it around the disk
+// (azimuth), vertical drag moves it over the top (pitch), the same values as the sliders.
 const DRAG_DEGREES_PER_PX = 0.3
 const dragging = ref(false)
 let dragX = 0
 let dragY = 0
-let dragYaw = 0
+let dragAzimuth = 0
 let dragPitch = 0
 
 function startDrag(event) {
@@ -1872,14 +1898,16 @@ function startDrag(event) {
   dragging.value = true
   dragX = event.clientX
   dragY = event.clientY
-  dragYaw = yaw.value
+  dragAzimuth = azimuth.value
   dragPitch = pitch.value
   event.currentTarget.setPointerCapture(event.pointerId)
 }
 
 function dragMove(event) {
   if (!dragging.value) return
-  yaw.value = Math.round(clamp(dragYaw + (event.clientX - dragX) * DRAG_DEGREES_PER_PX, -90, 90))
+  // wraps round, so the camera can keep circling
+  const turned = dragAzimuth + (event.clientX - dragX) * DRAG_DEGREES_PER_PX
+  azimuth.value = Math.round(turned - 360 * Math.round(turned / 360))
   pitch.value = Math.round(clamp(dragPitch - (event.clientY - dragY) * DRAG_DEGREES_PER_PX, 0, 89))
 }
 
@@ -1903,7 +1931,7 @@ function wheelZoom(event) {
 // disk texture, and the volume quality its target, so they jump at the end instead of animating.
 const RESET_MS = 800
 const RESET_KEYS = {
-  bloom, speed, orbit, zoom, massLog, temperature, brightness, roll, pitch, yaw, rIn, rOut, spin, thickness, density, starBrightness, starAmount, accretionLog, orbiterOrbit,
+  bloom, speed, orbit, zoom, massLog, temperature, brightness, roll, pitch, yaw, azimuth, rIn, rOut, spin, thickness, density, starBrightness, starAmount, accretionLog, orbiterOrbit,
 }
 let resetFrame = 0
 let resetting = false
@@ -2348,6 +2376,7 @@ function traceRays() {
   const view = viewAngles()
   gl.uniform1f(traceProgram.uniforms.uTilt, view.tilt)
   gl.uniform1f(traceProgram.uniforms.uIncl, view.incl)
+  gl.uniform1f(traceProgram.uniforms.uAzimuth, azimuth.value * Math.PI / 180)
   gl.uniform1f(traceProgram.uniforms.uUnit, unit)
   gl.uniform1f(traceProgram.uniforms.uRIn, innerRadius.value)
   gl.uniform1f(traceProgram.uniforms.uROut, rOut.value)
@@ -2397,6 +2426,7 @@ function renderVolume() {
   const view = viewAngles()
   gl.uniform1f(uniforms.uTilt, view.tilt)
   gl.uniform1f(uniforms.uIncl, view.incl)
+  gl.uniform1f(uniforms.uAzimuth, azimuth.value * Math.PI / 180)
   gl.uniform1f(uniforms.uUnit, unit)
   gl.uniform1f(uniforms.uRIn, innerRadius.value)
   gl.uniform1f(uniforms.uROut, rOut.value)

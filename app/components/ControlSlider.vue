@@ -14,7 +14,7 @@ defineEmits<{ change: [event: Event] }>()
 
 <template>
   <UTooltip :text="hint" :delay-duration="300" :ui="{ content: 'h-auto max-w-xs py-1.5', text: 'whitespace-normal' }">
-    <UFormField :label="label" :hint="display">
+    <UFormField :label="label" :hint="display" :class="{ 'control-disabled': disabled }">
       <USlider
         v-model="model"
         :min="min"
